@@ -4,10 +4,21 @@ import (
 	"container/list"
 	"testing"
 	"time"
+
+	"github.com/IBM/sarama"
 )
+
+type testConsumerGroupClaim struct{}
+
+func (testConsumerGroupClaim) Topic() string                            { return "test-topic" }
+func (testConsumerGroupClaim) Partition() int32                         { return 0 }
+func (testConsumerGroupClaim) InitialOffset() int64                     { return 0 }
+func (testConsumerGroupClaim) HighWaterMarkOffset() int64               { return 0 }
+func (testConsumerGroupClaim) Messages() <-chan *sarama.ConsumerMessage { return nil }
 
 func newTestConversationBucketRunner() *conversationBucketClaimRunner {
 	return &conversationBucketClaimRunner{
+		claim:         testConsumerGroupClaim{},
 		buckets:       make(map[string]*conversationBucketState),
 		lruList:       list.New(),
 		maxBuckets:    2,

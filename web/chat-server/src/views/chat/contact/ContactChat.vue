@@ -945,7 +945,7 @@
 
 <script>
 // 组件脚本负责管理聊天状态、消息收发、会话切换以及音视频信令处理。
-import { computed, reactive, toRefs, onMounted, ref, nextTick } from "vue";
+import { computed, reactive, toRefs, onMounted, ref, nextTick, watch } from "vue";
 import { useRouter, onBeforeRouteUpdate } from "vue-router";
 import { useStore } from "vuex";
 import axios from "axios";
@@ -1064,6 +1064,13 @@ export default {
 
     const sortMessageList = () => {
       data.messageList.sort((left, right) => left.session_seq - right.session_seq);
+    };
+
+    const buildMessageId = () => {
+      if (window.crypto?.randomUUID) {
+        return `M${window.crypto.randomUUID().replace(/-/g, "")}`;
+      }
+      return `M${Date.now().toString(36)}${Math.random().toString(36).slice(2, 10)}`;
     };
 
     const getMessageDedupKey = (message) => {
@@ -1215,8 +1222,20 @@ export default {
     };
 
     const bindSocketMessageHandler = () => {
+      if (!store.state.socket) {
+        return;
+      }
       store.state.socket.onmessage = handleSocketMessage;
     };
+
+    watch(
+      () => store.state.socket,
+      (socket) => {
+        if (socket) {
+          socket.onmessage = handleSocketMessage;
+        }
+      }
+    );
 
     // 路由参数变化意味着用户切换了聊天对象，需要重拉联系人信息、会话 ID 与历史消息。
     onBeforeRouteUpdate(async (to, from, next) => {
@@ -1540,6 +1559,7 @@ export default {
     };
     const sendMessage = () => {
       const chatMessageRequest = {
+        message_id: buildMessageId(),
         session_id: data.sessionId,
         type: 0,
         content: data.chatMessage,
@@ -1559,6 +1579,7 @@ export default {
 
     const sendFileMessage = async (fileUrl) => {
       const chatFileMessageRequest = {
+        message_id: buildMessageId(),
         session_id: data.sessionId,
         type: 2,
         content: "",
@@ -1578,6 +1599,7 @@ export default {
 
     const sendAvatarMessage = (avatarUrl) => {
       const chatAvatarMessageRequest = {
+        message_id: buildMessageId(),
         session_id: data.sessionId,
         type: 2,
         content: "",
@@ -1954,6 +1976,7 @@ export default {
             },
           };
           const rtcMessageRequest = {
+            message_id: buildMessageId(),
             session_id: data.sessionId,
             type: 3,
             content: "",
@@ -2053,6 +2076,7 @@ export default {
           };
           console.log(desc);
           const rtcMessageRequest = {
+            message_id: buildMessageId(),
             session_id: data.sessionId,
             type: 3,
             content: "",
@@ -2089,6 +2113,7 @@ export default {
           };
           console.log(desc);
           const rtcMessageRequest = {
+            message_id: buildMessageId(),
             session_id: data.sessionId,
             type: 3,
             content: "",
@@ -2139,6 +2164,7 @@ export default {
           type: "start_call",
         };
         const rtcMessageRequest = {
+          message_id: buildMessageId(),
           session_id: data.sessionId,
           type: 3,
           content: "",
@@ -2159,6 +2185,7 @@ export default {
           type: "receive_call",
         };
         const rtcMessageRequest = {
+          message_id: buildMessageId(),
           session_id: data.sessionId,
           type: 3,
           content: "",
@@ -2196,6 +2223,7 @@ export default {
         messageId: "PEER_LEAVE",
       };
       const rtcMessageRequest = {
+        message_id: buildMessageId(),
         session_id: data.sessionId,
         type: 3,
         content: "",
@@ -2274,6 +2302,7 @@ export default {
         type: "reject_call",
       };
       const rtcMessageRequest = {
+        message_id: buildMessageId(),
         session_id: data.sessionId,
         type: 3,
         content: "",

@@ -181,6 +181,12 @@ type KafkaConfig struct {
 	ConversationBucketMaxRunDurationMs int `toml:"conversationBucketMaxRunDurationMs"`
 	// ConversationBucketDrainTimeoutMs 是 claim 结束时等待 conversation bucket 在途任务回收的最长时间，单位毫秒。
 	ConversationBucketDrainTimeoutMs int `toml:"conversationBucketDrainTimeoutMs"`
+	// WSHeartbeatIntervalMs 是服务端 websocket ping 探测周期，单位毫秒。
+	WSHeartbeatIntervalMs int `toml:"wsHeartbeatIntervalMs"`
+	// WSSilenceTimeoutMs 是连接最长静默窗口，单位毫秒。
+	WSSilenceTimeoutMs int `toml:"wsSilenceTimeoutMs"`
+	// WSRouteTTLSeconds 是 Redis 在线路由 TTL，单位秒。
+	WSRouteTTLSeconds int `toml:"wsRouteTTLSeconds"`
 }
 
 // ResolveMessageKey 返回当前聊天消息写入 Kafka 时应使用的 key。
@@ -374,6 +380,30 @@ func (k KafkaConfig) ResolveConversationBucketDrainTimeout() time.Duration {
 		return time.Duration(k.ConversationBucketDrainTimeoutMs) * time.Millisecond
 	}
 	return 3 * time.Second
+}
+
+// ResolveWSHeartbeatInterval 返回 websocket 心跳探测周期。
+func (k KafkaConfig) ResolveWSHeartbeatInterval() time.Duration {
+	if k.WSHeartbeatIntervalMs > 0 {
+		return time.Duration(k.WSHeartbeatIntervalMs) * time.Millisecond
+	}
+	return 15 * time.Second
+}
+
+// ResolveWSSilenceTimeout 返回 websocket 最长静默窗口。
+func (k KafkaConfig) ResolveWSSilenceTimeout() time.Duration {
+	if k.WSSilenceTimeoutMs > 0 {
+		return time.Duration(k.WSSilenceTimeoutMs) * time.Millisecond
+	}
+	return 40 * time.Second
+}
+
+// ResolveWSRouteTTL 返回 Redis 在线路由 TTL。
+func (k KafkaConfig) ResolveWSRouteTTL() time.Duration {
+	if k.WSRouteTTLSeconds > 0 {
+		return time.Duration(k.WSRouteTTLSeconds) * time.Second
+	}
+	return 60 * time.Second
 }
 
 // UseRedisOnlySessionSeqExperimental 返回当前是否启用 session_seq 的 Redis-only 实验路径。

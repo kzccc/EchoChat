@@ -1428,6 +1428,57 @@ def post_bench_admin_reset(base_url: str) -> None:
         raise RuntimeError(f"bench admin reset failed: {url} -> {payload}")
 
 
+def post_bench_admin_json(base_url: str, path: str, payload: dict) -> dict:
+    url = base_url.rstrip("/") + path
+    response = requests.post(url, timeout=30, json=payload)
+    response.raise_for_status()
+    result = response.json()
+    if result.get("code") != 200:
+        raise RuntimeError(f"bench admin post failed: {url} -> {result}")
+    return result.get("data", {})
+
+
+def load_fixture_json(path: Path) -> dict:
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def prepare_session_seq_recovery(
+    bench_admin_base_url: str,
+    fixture_path: Path,
+    *,
+    delete_pair_count: int,
+    progress_cb=None,
+) -> dict:
+    fixture = load_fixture_json(fixture_path)
+    pairs = list(fixture.get("single_pairs", []))
+    if not pairs:
+        raise RuntimeError("fixture single_pairs is empty, cannot prepare session_seq recovery")
+    target_pairs = pairs[: max(0, delete_pair_count)]
+    if not target_pairs:
+        raise RuntimeError("session_seq recovery delete_pair_count resolved to 0")
+
+    if progress_cb:
+        progress_cb("recovery 准备：flush session_seq 高水位")
+    post_bench_admin_json(bench_admin_base_url, "/bench/admin/session_seq/flush_state", {})
+
+    deleted_keys: list[str] = []
+    for pair in target_pairs:
+        conversation_key = build_conversation_key(pair["sender_uuid"], pair["receiver_uuid"])
+        post_bench_admin_json(
+            bench_admin_base_url,
+            "/bench/admin/session_seq/redis_key/delete",
+            {"conversation_key": conversation_key},
+        )
+        deleted_keys.append(conversation_key)
+
+    if progress_cb:
+        progress_cb(f"recovery 准备：已删除 {len(deleted_keys)} 个 session_seq redis key")
+    return {
+        "deleted_pair_count": len(deleted_keys),
+        "conversation_keys": deleted_keys,
+    }
+
+
 def build_throughput_report(summary: dict) -> str:
     expected = summary.get("expected_messages")
     received = summary.get("received_messages")
@@ -1443,8 +1494,8 @@ def build_throughput_report(summary: dict) -> str:
         f"- 结束前写回：`{received_before_drain}`",
         f"- 拖尾补完：`{recovered}`",
         f"- 客户端最终收到：`{received}`",
-        f"- 实际总时长：`{summary.get('duration_sec')}s`",
-        f"- 客户端 observed 吞吐：`{summary.get('observed_throughput_msg_per_sec')} msg/s`",
+        f"- 发送窗口：`{summary.get('duration_sec')}s`",
+        f"- 客户端 observed 吞吐（窗口内平均）：`{summary.get('observed_throughput_msg_per_sec')} msg/s`",
         f"- 成功率：`{summary.get('delivery_success_rate')}`",
     ]
     latency = summary.get("latency", {})
@@ -1725,6 +1776,7 @@ def maybe_run_message_latency_runner(
     progress_cb=None,
 ) -> tuple[Path | None, bool]:
     run_cfg = cfg.get("run", {})
+    benchmark = cfg.get("benchmark", {})
     fixture_path = maybe_prepare_fixture(
         cfg,
         raw_dir,
@@ -1748,7 +1800,6 @@ def maybe_run_message_latency_runner(
     if messages_per_sender is None or send_interval_ms is None:
         raise ValueError("failed to derive messages_per_sender or send_interval_ms from config")
 
-    benchmark = cfg.get("benchmark", {})
     scenario = cfg.get("scenario", {})
     script_path = ROOT / "docs/k6_message_test/scripts/message_latency_runner.py"
     output_dir = raw_dir / "runner"
@@ -1834,6 +1885,19 @@ def maybe_run_message_latency_runner(
             if progress_cb:
                 progress_cb(f"预热完成，等待链路稳定 {warmup_settle_ms}ms")
             time.sleep(warmup_settle_ms / 1000.0)
+        if bool(benchmark.get("session_seq_force_flush_after_warmup", False)):
+            if progress_cb:
+                progress_cb("预热后 flush session_seq 高水位")
+            post_bench_admin_json(bench_admin_base_url, "/bench/admin/session_seq/flush_state", {})
+        if bool(benchmark.get("session_seq_prepare_recovery_after_warmup", False)):
+            delete_pair_count = int(benchmark.get("session_seq_recovery_delete_pair_count", scenario.get("session_count", 0)))
+            recovery_context = prepare_session_seq_recovery(
+                bench_admin_base_url,
+                fixture_path,
+                delete_pair_count=delete_pair_count,
+                progress_cb=progress_cb,
+            )
+            write_text(raw_dir / "session_seq_recovery_context.json", json.dumps(recovery_context, ensure_ascii=False, indent=2))
         if bench_admin_base_url:
             if progress_cb:
                 progress_cb("正式压测前重置 bench admin")
@@ -1938,6 +2002,9 @@ def main() -> int:
             ensure_mysql_database(mysql_settings)
             progress.set(6, "启动后端服务", bench_admin_base_url or "bench-admin")
             server_process = start_local_server_if_needed(runtime_config_path, bench_admin_base_url, raw_dir)
+            if bool(cfg.get("benchmark", {}).get("session_seq_reset_state_before_run", False)):
+                progress.set(6, "重置 session_seq 初始化状态", bench_admin_base_url)
+                post_bench_admin_json(bench_admin_base_url, "/bench/admin/session_seq/reset_state", {})
             progress.set(7, "准备 fixture 与执行压测")
             generated_summary_path, ran_latency_runner = maybe_run_message_latency_runner(
                 cfg,

@@ -5,13 +5,13 @@
 
 <script>
 // 组件脚本负责当前组件的状态管理、事件响应和对外通信。
-import { onMounted } from "vue";
+import { onBeforeUnmount, onMounted } from "vue";
 import { useStore } from "vuex";
 import { useRouter } from "vue-router";
 import axios from "axios";
 import { ElMessage } from "element-plus";
 import {
-  connectSocket,
+  ensureSocketConnected,
   logoutSession,
   normalizeUserInfo,
 } from "@/utils/session";
@@ -46,6 +46,15 @@ export default {
       router.push("/login");
       ElMessage.error("账号已被禁用，请联系管理员。");
     };
+    const ensureSocketAlive = () => {
+      ensureSocketConnected(store);
+    };
+    const handleVisibilityOrFocus = () => {
+      if (document.visibilityState === "hidden") {
+        return;
+      }
+      ensureSocketAlive();
+    };
     onMounted(async () => {
       if (store.state.accessToken && store.state.refreshToken && store.state.userInfo.uuid) {
         const userInfo = await getUserInfo();
@@ -56,8 +65,14 @@ export default {
           await logout();
           return;
         }
-        connectSocket(store);
+        ensureSocketAlive();
       }
+      document.addEventListener("visibilitychange", handleVisibilityOrFocus);
+      window.addEventListener("focus", handleVisibilityOrFocus);
+    });
+    onBeforeUnmount(() => {
+      document.removeEventListener("visibilitychange", handleVisibilityOrFocus);
+      window.removeEventListener("focus", handleVisibilityOrFocus);
     });
     return {};
   },

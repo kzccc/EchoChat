@@ -10,6 +10,7 @@ import (
 	"echo_chat_server/internal/dao"
 	"echo_chat_server/internal/https_server"
 	"echo_chat_server/internal/service/chat"
+	"echo_chat_server/internal/service/dlq"
 	"echo_chat_server/internal/service/kafka"
 	myredis "echo_chat_server/internal/service/redis"
 	"echo_chat_server/pkg/zlog"
@@ -46,6 +47,9 @@ func main() {
 	} else {
 		go chat.KafkaChatServer.Start()
 	}
+	dlqReplayCtx, dlqReplayCancel := context.WithCancel(context.Background())
+	defer dlqReplayCancel()
+	go dlq.NewReplayScheduler(10*time.Second, 100, chat.RunDLQReplay).Start(dlqReplayCtx)
 
 	httpServer := &http.Server{ //创建了一个 *http.Server 实例，用于启动一个 HTTP 服务器。
 		Addr:              fmt.Sprintf("%s:%d", host, port),

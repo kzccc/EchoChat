@@ -3,14 +3,14 @@ package https_server
 // 本文件负责初始化 Gin 引擎、中间件与全部 HTTP / WebSocket 路由。
 
 import (
-	"github.com/gin-contrib/cors"
-	"github.com/gin-gonic/gin"
-	"io"
 	v1 "echo_chat_server/api/v1"
 	"echo_chat_server/internal/config"
 	"echo_chat_server/internal/observability"
 	"echo_chat_server/internal/pressure"
 	"echo_chat_server/pkg/constants"
+	"github.com/gin-contrib/cors"
+	"github.com/gin-gonic/gin"
+	"io"
 )
 
 var GE *gin.Engine
@@ -116,6 +116,15 @@ func init() {
 			admin.POST("/group/getGroupInfoList", v1.GetGroupInfoList)
 			admin.POST("/group/deleteGroups", v1.DeleteGroups)
 			admin.POST("/group/setGroupsStatus", v1.SetGroupsStatus)
+
+			admin.POST("/dlq/list", v1.DLQList)
+			admin.POST("/dlq/detail", v1.DLQDetail)
+			admin.POST("/dlq/logs", v1.DLQLogs)
+			admin.POST("/dlq/stats", v1.DLQStats)
+			admin.POST("/dlq/claim", v1.DLQClaim)
+			admin.POST("/dlq/reopen", v1.DLQReopen)
+			admin.POST("/dlq/close", v1.DLQClose)
+			admin.POST("/dlq/remark", v1.DLQRemark)
 		}
 	}
 }

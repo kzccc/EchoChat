@@ -27,6 +27,13 @@ type kafkaWSDispatchEnvelope struct {
 	UUID     string `json:"uuid"`
 }
 
+type kafkaWSRouteRecord struct {
+	InstanceID      string `json:"instance_id"`
+	ConnectionID    string `json:"connection_id"`
+	ActiveAtUnix    int64  `json:"active_at_unix"`
+	ConnectedAtUnix int64  `json:"connected_at_unix"`
+}
+
 func kafkaInstanceID() string {
 	conf := config.GetConfig()
 	return fmt.Sprintf("chat-%d", conf.MainConfig.Port)
@@ -40,17 +47,123 @@ func kafkaWSDispatchChannel(instanceID string) string {
 	return kafkaWSDispatchChannelPrefix + instanceID
 }
 
+func newKafkaWSRouteRecord(client *Client, instanceID string, now time.Time) kafkaWSRouteRecord {
+	connectedAt := now.Unix()
+	if client != nil && !client.connectedAt.IsZero() {
+		connectedAt = client.connectedAt.Unix()
+	}
+	return kafkaWSRouteRecord{
+		InstanceID:      instanceID,
+		ConnectionID:    client.ConnectionID,
+		ActiveAtUnix:    now.Unix(),
+		ConnectedAtUnix: connectedAt,
+	}
+}
+
+func encodeKafkaWSRouteRecord(record kafkaWSRouteRecord) (string, error) {
+	payload, err := json.Marshal(record)
+	if err != nil {
+		return "", err
+	}
+	return string(payload), nil
+}
+
+func decodeKafkaWSRouteRecord(raw string) (kafkaWSRouteRecord, error) {
+	var record kafkaWSRouteRecord
+	if raw == "" {
+		return record, errors.New("empty route record")
+	}
+	if raw[0] != '{' {
+		record.InstanceID = raw
+		return record, nil
+	}
+	if err := json.Unmarshal([]byte(raw), &record); err != nil {
+		return kafkaWSRouteRecord{}, err
+	}
+	if record.InstanceID == "" {
+		return kafkaWSRouteRecord{}, errors.New("route record missing instance_id")
+	}
+	return record, nil
+}
+
+func deleteKafkaWSRouteIfMatches(clientID string, expectedInstanceID string, expectedConnectionID string) error {
+	raw, err := myredis.GetKeyNilIsErr(kafkaWSRouteKey(clientID))
+	if err != nil {
+		if errors.Is(err, redis.Nil) {
+			return nil
+		}
+		return err
+	}
+	record, err := decodeKafkaWSRouteRecord(raw)
+	if err != nil {
+		return err
+	}
+	if record.InstanceID != expectedInstanceID {
+		return nil
+	}
+	if expectedConnectionID != "" && record.ConnectionID != expectedConnectionID {
+		return nil
+	}
+	return myredis.DelKeyIfValueMatches(kafkaWSRouteKey(clientID), raw)
+}
+
 func (k *KafkaServer) registerClientRoute(client *Client) {
 	if client == nil || client.Uuid == "" {
 		return
 	}
-	if err := myredis.SetKey(kafkaWSRouteKey(client.Uuid), k.instanceID); err != nil {
+	record := newKafkaWSRouteRecord(client, k.instanceID, time.Now())
+	payload, err := encodeKafkaWSRouteRecord(record)
+	if err != nil {
+		zlog.Error(
+			"kafka.ws.route.encode_failed",
+			zap.String("event", "kafka.ws.route.encode_failed"),
+			zap.String("module", "chat.kafka"),
+			zap.String("instance_id", k.instanceID),
+			zap.String("client_id", client.Uuid),
+			zap.String("connection_id", client.ConnectionID),
+			zap.String("error", err.Error()),
+		)
+		return
+	}
+	if err := myredis.SetKeyEx(kafkaWSRouteKey(client.Uuid), payload, config.GetConfig().KafkaConfig.ResolveWSRouteTTL()); err != nil {
 		zlog.Error(
 			"kafka.ws.route.register_failed",
 			zap.String("event", "kafka.ws.route.register_failed"),
 			zap.String("module", "chat.kafka"),
 			zap.String("instance_id", k.instanceID),
 			zap.String("client_id", client.Uuid),
+			zap.String("connection_id", client.ConnectionID),
+			zap.String("error", err.Error()),
+		)
+	}
+}
+
+func (k *KafkaServer) renewClientRoute(client *Client, now time.Time) {
+	if client == nil || client.Uuid == "" || client.ConnectionID == "" {
+		return
+	}
+	record := newKafkaWSRouteRecord(client, k.instanceID, now)
+	payload, err := encodeKafkaWSRouteRecord(record)
+	if err != nil {
+		zlog.Error(
+			"kafka.ws.route.renew_encode_failed",
+			zap.String("event", "kafka.ws.route.renew_encode_failed"),
+			zap.String("module", "chat.kafka"),
+			zap.String("instance_id", k.instanceID),
+			zap.String("client_id", client.Uuid),
+			zap.String("connection_id", client.ConnectionID),
+			zap.String("error", err.Error()),
+		)
+		return
+	}
+	if err := myredis.SetKeyEx(kafkaWSRouteKey(client.Uuid), payload, config.GetConfig().KafkaConfig.ResolveWSRouteTTL()); err != nil {
+		zlog.Error(
+			"kafka.ws.route.renew_failed",
+			zap.String("event", "kafka.ws.route.renew_failed"),
+			zap.String("module", "chat.kafka"),
+			zap.String("instance_id", k.instanceID),
+			zap.String("client_id", client.Uuid),
+			zap.String("connection_id", client.ConnectionID),
 			zap.String("error", err.Error()),
 		)
 	}
@@ -60,13 +173,14 @@ func (k *KafkaServer) unregisterClientRoute(client *Client) {
 	if client == nil || client.Uuid == "" {
 		return
 	}
-	if err := myredis.DelKeyIfValueMatches(kafkaWSRouteKey(client.Uuid), k.instanceID); err != nil {
+	if err := deleteKafkaWSRouteIfMatches(client.Uuid, k.instanceID, client.ConnectionID); err != nil {
 		zlog.Error(
 			"kafka.ws.route.unregister_failed",
 			zap.String("event", "kafka.ws.route.unregister_failed"),
 			zap.String("module", "chat.kafka"),
 			zap.String("instance_id", k.instanceID),
 			zap.String("client_id", client.Uuid),
+			zap.String("connection_id", client.ConnectionID),
 			zap.String("error", err.Error()),
 		)
 	}
@@ -90,7 +204,20 @@ func (k *KafkaServer) remoteRouteForClient(clientID string) string {
 		}
 		return ""
 	}
-	return value
+	record, err := decodeKafkaWSRouteRecord(value)
+	if err != nil {
+		zlog.Error(
+			"kafka.ws.route.decode_failed",
+			zap.String("event", "kafka.ws.route.decode_failed"),
+			zap.String("module", "chat.kafka"),
+			zap.String("instance_id", k.instanceID),
+			zap.String("client_id", clientID),
+			zap.String("error", err.Error()),
+		)
+		_ = myredis.DelKeyIfExists(kafkaWSRouteKey(clientID))
+		return ""
+	}
+	return record.InstanceID
 }
 
 func (k *KafkaServer) startRemoteDispatchSubscriber() {
@@ -125,7 +252,7 @@ func (k *KafkaServer) startRemoteDispatchSubscriber() {
 			client := k.GetClient(envelope.ClientID)
 			if client == nil {
 				observability.ObserveKafkaWSDispatchEvent(k.instanceID, "remote_receive_client_miss")
-				_ = myredis.DelKeyIfValueMatches(kafkaWSRouteKey(envelope.ClientID), k.instanceID)
+				_ = deleteKafkaWSRouteIfMatches(envelope.ClientID, k.instanceID, "")
 				continue
 			}
 			enqueueStart := time.Now()
@@ -181,7 +308,7 @@ func (k *KafkaServer) dispatchToKafkaRecipients(recipientIDs []string, message [
 		observability.ObserveKafkaWSDispatchEvent(k.instanceID, "route_lookup_hit")
 		if remoteInstanceID == k.instanceID {
 			observability.ObserveKafkaWSDispatchEvent(k.instanceID, "route_lookup_stale_self")
-			_ = myredis.DelKeyIfValueMatches(kafkaWSRouteKey(recipientID), k.instanceID)
+			_ = deleteKafkaWSRouteIfMatches(recipientID, k.instanceID, "")
 			continue
 		}
 		envelope := kafkaWSDispatchEnvelope{

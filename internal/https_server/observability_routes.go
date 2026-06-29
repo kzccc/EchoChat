@@ -3,6 +3,7 @@ package https_server
 import (
 	"net/http"
 	"net/http/pprof"
+	"strings"
 
 	"github.com/gin-gonic/gin"
 
@@ -10,6 +11,7 @@ import (
 	"echo_chat_server/internal/observability"
 	"echo_chat_server/internal/pressure"
 	"echo_chat_server/internal/service/chat"
+	myredis "echo_chat_server/internal/service/redis"
 )
 
 func registerObservabilityRoutes(engine *gin.Engine) {
@@ -43,6 +45,57 @@ func registerObservabilityRoutes(engine *gin.Engine) {
 		engine.POST("/bench/admin/reset", func(c *gin.Context) {
 			pressure.ResetBenchmarkTrace()
 			c.JSON(http.StatusOK, gin.H{"code": 200, "msg": "ok"})
+		})
+		engine.POST("/bench/admin/session_seq/reset_state", func(c *gin.Context) {
+			chat.ResetConversationSequenceBenchState()
+			c.JSON(http.StatusOK, gin.H{"code": 200, "msg": "ok"})
+		})
+		engine.POST("/bench/admin/session_seq/flush_state", func(c *gin.Context) {
+			if err := chat.FlushConversationSequenceBenchState(); err != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "msg": err.Error()})
+				return
+			}
+			c.JSON(http.StatusOK, gin.H{"code": 200, "msg": "ok"})
+		})
+		engine.POST("/bench/admin/session_seq/redis_key/delete", func(c *gin.Context) {
+			type requestBody struct {
+				ConversationKey string `json:"conversation_key"`
+			}
+			var req requestBody
+			if err := c.ShouldBindJSON(&req); err != nil {
+				c.JSON(http.StatusBadRequest, gin.H{"code": 400, "msg": err.Error()})
+				return
+			}
+			conversationKey := strings.TrimSpace(req.ConversationKey)
+			if conversationKey == "" {
+				c.JSON(http.StatusBadRequest, gin.H{"code": 400, "msg": "conversation_key is required"})
+				return
+			}
+			redisKey := "message_session_seq_" + conversationKey
+			if err := myredis.DelKeyIfExists(redisKey); err != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "msg": err.Error()})
+				return
+			}
+			c.JSON(http.StatusOK, gin.H{"code": 200, "msg": "ok", "data": gin.H{"redis_key": redisKey}})
+		})
+		engine.GET("/bench/admin/session_seq/redis_key_status", func(c *gin.Context) {
+			conversationKey := strings.TrimSpace(c.Query("conversation_key"))
+			if conversationKey == "" {
+				c.JSON(http.StatusBadRequest, gin.H{"code": 400, "msg": "conversation_key is required"})
+				return
+			}
+			redisKey := "message_session_seq_" + conversationKey
+			exists, err := myredis.KeyExists(redisKey)
+			if err != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "msg": err.Error()})
+				return
+			}
+			value, err := myredis.GetKey(redisKey)
+			if err != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "msg": err.Error()})
+				return
+			}
+			c.JSON(http.StatusOK, gin.H{"code": 200, "data": gin.H{"redis_key": redisKey, "exists": exists, "value": value}})
 		})
 		engine.GET("/bench/admin/trace", func(c *gin.Context) {
 			c.JSON(http.StatusOK, gin.H{"code": 200, "data": pressure.SnapshotBenchmarkTrace()})

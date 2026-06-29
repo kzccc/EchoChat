@@ -178,18 +178,20 @@ func (p *kafkaMessagePersister) run(workerIndex int, jobs <-chan *kafkaPersistJo
 		flushReason := "single"
 		if batchSize == 1 {
 			p.flush(workerIndex, batch, "batch_full")
+			p.activeWorker[workerIndex].Store(0)
 			continue
 		}
 
 		if firstJobHold > 0 {
 			collectStartAt := time.Now()
 			pressure.ObserveBenchmarkEventAt(firstJob.message.Uuid, "mysql_persist_batch_collect_start", collectStartAt, map[string]interface{}{
-				"worker_index": workerIndex,
+				"worker_index":      workerIndex,
 				"target_batch_size": batchSize,
 			})
 			holdTimer := time.NewTimer(firstJobHold)
 			select {
 			case job := <-jobs:
+				p.workerLoads[workerIndex].Add(-1)
 				batch = append(batch, job)
 			case <-holdTimer.C:
 			}
@@ -204,6 +206,7 @@ func (p *kafkaMessagePersister) run(workerIndex int, jobs <-chan *kafkaPersistJo
 		for len(batch) < batchSize {
 			select {
 			case job := <-jobs:
+				p.workerLoads[workerIndex].Add(-1)
 				batch = append(batch, job)
 			default:
 				goto maybeFlush
@@ -214,12 +217,13 @@ func (p *kafkaMessagePersister) run(workerIndex int, jobs <-chan *kafkaPersistJo
 	maybeFlush:
 		if len(batch) == 1 {
 			p.flush(workerIndex, batch, flushReason)
+			p.activeWorker[workerIndex].Store(0)
 			continue
 		}
 
 		collectStartAt := time.Now()
 		pressure.ObserveBenchmarkEventAt(firstJob.message.Uuid, "mysql_persist_batch_collect_start", collectStartAt, map[string]interface{}{
-			"worker_index": workerIndex,
+			"worker_index":      workerIndex,
 			"target_batch_size": batchSize,
 		})
 		timer := time.NewTimer(flushInterval)
@@ -227,6 +231,7 @@ func (p *kafkaMessagePersister) run(workerIndex int, jobs <-chan *kafkaPersistJo
 		for len(batch) < batchSize {
 			select {
 			case job := <-jobs:
+				p.workerLoads[workerIndex].Add(-1)
 				batch = append(batch, job)
 				if len(batch) >= batchSize {
 					flushReason = "batch_full"
@@ -424,6 +429,9 @@ func persistKafkaMessagesFallback(sqlDB *sql.DB, batch []*kafkaPersistJob) {
 			continue
 		}
 		if !isDuplicateMessageError(err) {
+			if dlqErr := writePersistFailureToDLQ(job.message, err); dlqErr != nil {
+				zlog.Error(dlqErr.Error())
+			}
 			job.result <- kafkaPersistResult{err: err}
 			continue
 		}
@@ -438,10 +446,16 @@ func persistKafkaMessagesFallback(sqlDB *sql.DB, batch []*kafkaPersistJob) {
 				zap.String("message_id", job.message.Uuid),
 				zap.String("error", err.Error()),
 			)
+			if dlqErr := writePersistFailureToDLQ(job.message, err); dlqErr != nil {
+				zlog.Error(dlqErr.Error())
+			}
 			job.result <- kafkaPersistResult{err: err}
 			continue
 		}
 		if !isMessageUUIDDuplicateError(err) {
+			if dlqErr := writePersistFailureToDLQ(job.message, err); dlqErr != nil {
+				zlog.Error(dlqErr.Error())
+			}
 			job.result <- kafkaPersistResult{err: err}
 			continue
 		}
@@ -461,6 +475,11 @@ func persistKafkaMessages(batch []*kafkaPersistJob) error {
 		if isDuplicateMessageError(err) {
 			persistKafkaMessagesFallback(sqlDB, batch)
 			return nil
+		}
+		for _, job := range batch {
+			if dlqErr := writePersistFailureToDLQ(job.message, err); dlqErr != nil {
+				zlog.Error(dlqErr.Error())
+			}
 		}
 		return err
 	}

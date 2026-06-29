@@ -272,6 +272,11 @@ func (r *conversationBucketClaimRunner) run() error {
 			decoded, err := decodeConsumedMessage(kafkaMessage)
 			if err != nil {
 				stage, retryable := consumerErrorMeta(err)
+				if !retryable {
+					if dlqErr := writeKafkaMessageToDLQ(kafkaMessage, nil, stage, false, err); dlqErr != nil {
+						zlog.Error(dlqErr.Error())
+					}
+				}
 				observability.ObserveKafkaConsumeFailure(consumerGroup, kafkaMessage.Topic, kafkaMessage.Partition, stage)
 				if retryable {
 					observability.ObserveKafkaConsumeHandled(consumerGroup, kafkaMessage.Topic, kafkaMessage.Partition, "retryable_failure")
@@ -534,6 +539,12 @@ func (r *conversationBucketClaimRunner) safeProcessJob(workerIndex int, job *con
 	defer func() {
 		if recovered := recover(); recovered != nil {
 			r.logWorkerPanic(workerIndex, job, recovered)
+			if job != nil && job.kafkaMessage != nil {
+				panicErr := fmt.Errorf("conversation bucket panic: %v", recovered)
+				if dlqErr := writeKafkaMessageToDLQ(job.kafkaMessage, &job.decoded, "conversation_bucket_worker_panic", false, panicErr); dlqErr != nil {
+					zlog.Error(dlqErr.Error())
+				}
+			}
 			result = &conversationBucketProcessResult{
 				job:       job,
 				err:       fmt.Errorf("conversation bucket panic: %v", recovered),
@@ -881,6 +892,9 @@ func (r *conversationBucketClaimRunner) processJob(workerIndex int, job *convers
 		stage, retryable := consumerErrorMeta(err)
 		observability.ObserveKafkaConsumeFailure(config.GetConfig().KafkaConfig.ResolveConsumerGroup(), job.kafkaMessage.Topic, job.kafkaMessage.Partition, stage)
 		if !retryable {
+			if dlqErr := writeKafkaMessageToDLQ(job.kafkaMessage, &job.decoded, stage, false, err); dlqErr != nil {
+				zlog.Error(dlqErr.Error())
+			}
 			observability.ObserveKafkaConsumeHandled(config.GetConfig().KafkaConfig.ResolveConsumerGroup(), job.kafkaMessage.Topic, job.kafkaMessage.Partition, "non_retryable_failure")
 			return &conversationBucketProcessResult{job: job, err: err, markable: true, retryable: false}
 		}

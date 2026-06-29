@@ -1,5 +1,32 @@
 import axios from "axios";
 
+const reconnectState = {
+  timer: null,
+  retries: 0,
+  active: false,
+  maxWindowMs: 15 * 60 * 1000,
+  startedAt: 0,
+  schedule: [0, 1000, 2000, 5000, 10000],
+  backoffMs: 30000,
+  closingSocket: null,
+};
+
+export const isSocketAvailable = (socket) =>
+  !!socket &&
+  (socket.readyState === WebSocket.OPEN ||
+    socket.readyState === WebSocket.CONNECTING);
+
+export const shouldKeepReconnect = (store) => {
+  return !!(
+    store &&
+    store.state &&
+    store.state.accessToken &&
+    store.state.refreshToken &&
+    store.state.userInfo &&
+    store.state.userInfo.uuid
+  );
+};
+
 export const normalizeUserInfo = (store, userInfo) => {
   if (!userInfo) {
     return {};
@@ -9,6 +36,25 @@ export const normalizeUserInfo = (store, userInfo) => {
     nextUserInfo.avatar = store.state.backendUrl + nextUserInfo.avatar;
   }
   return nextUserInfo;
+};
+
+const closeSocketOnly = (store) => {
+  const socket = store.state.socket;
+  if (socket) {
+    reconnectState.closingSocket = socket;
+    try {
+      socket.close();
+    } catch (error) {
+      console.error(error);
+    } finally {
+      setTimeout(() => {
+        if (reconnectState.closingSocket === socket) {
+          reconnectState.closingSocket = null;
+        }
+      }, 0);
+    }
+  }
+  store.commit("setSocket", null);
 };
 
 export const applyLoginSession = (store, payload) => {
@@ -38,29 +84,85 @@ export const applyRefreshedTokens = (store, payload) => {
 };
 
 export const disconnectSocket = (store) => {
-  const socket = store.state.socket;
-  if (socket) {
-    try {
-      socket.close();
-    } catch (error) {
-      console.error(error);
-    }
-  }
-  store.commit("setSocket", null);
+  stopReconnect(store);
+  closeSocketOnly(store);
 };
 
-export const connectSocket = (store, handlers = {}) => {
-  if (!store.state.accessToken) {
+const clearReconnectTimer = () => {
+  if (reconnectState.timer) {
+    clearTimeout(reconnectState.timer);
+    reconnectState.timer = null;
+  }
+};
+
+export const stopReconnect = (store) => {
+  clearReconnectTimer();
+  reconnectState.active = false;
+  reconnectState.retries = 0;
+  reconnectState.startedAt = 0;
+  if (store) {
+    store.commit("setSocket", null);
+  }
+};
+
+const scheduleReconnect = (store, handlers = {}) => {
+  if (!reconnectState.active || !shouldKeepReconnect(store)) {
+    stopReconnect(store);
+    return;
+  }
+  const elapsed = Date.now() - reconnectState.startedAt;
+  if (elapsed > reconnectState.maxWindowMs) {
+    stopReconnect(store);
+    return;
+  }
+  const index = reconnectState.retries;
+  const delay =
+    reconnectState.schedule[index] !== undefined
+      ? reconnectState.schedule[index]
+      : reconnectState.backoffMs;
+  clearReconnectTimer();
+  reconnectState.timer = setTimeout(() => {
+    if (!reconnectState.active) {
+      return;
+    }
+    const socket = connectSocket(store, handlers, true);
+    if (!socket) {
+      reconnectState.retries += 1;
+      scheduleReconnect(store, handlers);
+      return;
+    }
+  }, delay);
+};
+
+export const startReconnect = (store, handlers = {}) => {
+  if (!shouldKeepReconnect(store)) {
+    return;
+  }
+  if (reconnectState.active) {
+    return;
+  }
+  reconnectState.active = true;
+  reconnectState.startedAt = Date.now();
+  reconnectState.retries = 0;
+  scheduleReconnect(store, handlers);
+};
+
+export const connectSocket = (store, handlers = {}, force = false) => {
+  if (!shouldKeepReconnect(store)) {
     return null;
   }
+  if (!reconnectState.active) {
+    reconnectState.active = true;
+    reconnectState.startedAt = Date.now();
+    reconnectState.retries = 0;
+  }
   if (
-    store.state.socket &&
-    (store.state.socket.readyState === WebSocket.OPEN ||
-      store.state.socket.readyState === WebSocket.CONNECTING)
+    !force &&
+    isSocketAvailable(store.state.socket)
   ) {
     return store.state.socket;
   }
-  disconnectSocket(store);
+  closeSocketOnly(store);
   const wsUrl =
     store.state.wsUrl +
     "/wss?token=" +
@@ -70,6 +172,9 @@ export const connectSocket = (store, handlers = {}) => {
     handlers.onOpen ||
     (() => {
       console.log("WebSocket连接已打开");
+      clearReconnectTimer();
+      reconnectState.retries = 0;
+      reconnectState.startedAt = Date.now();
     });
   socket.onmessage =
     handlers.onMessage ||
@@ -80,15 +185,38 @@ export const connectSocket = (store, handlers = {}) => {
     handlers.onClose ||
     (() => {
       console.log("WebSocket连接已关闭");
+      if (reconnectState.closingSocket === socket) {
+        reconnectState.closingSocket = null;
+        store.commit("setSocket", null);
+        return;
+      }
       store.commit("setSocket", null);
+      if (reconnectState.active && shouldKeepReconnect(store)) {
+        reconnectState.retries += 1;
+        scheduleReconnect(store, handlers);
+      }
     });
   socket.onerror =
     handlers.onError ||
     ((error) => {
       console.log("WebSocket连接发生错误", error);
+      if (reconnectState.active && shouldKeepReconnect(store)) {
+        reconnectState.retries += 1;
+        scheduleReconnect(store, handlers);
+      }
     });
   store.commit("setSocket", socket);
   return socket;
+};
+
+export const ensureSocketConnected = (store, handlers = {}) => {
+  if (!shouldKeepReconnect(store)) {
+    return null;
+  }
+  if (isSocketAvailable(store.state.socket)) {
+    return store.state.socket;
+  }
+  return connectSocket(store, handlers);
 };
 
 export const logoutSession = async (store) => {
@@ -102,6 +230,7 @@ export const logoutSession = async (store) => {
   } catch (error) {
     console.error(error);
   } finally {
+    stopReconnect(store);
     disconnectSocket(store);
     store.commit("cleanAuth");
   }

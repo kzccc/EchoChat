@@ -87,15 +87,19 @@ func handleDecodedConsumedMessage(k *KafkaServer, decoded decodedConsumedMessage
 		"partition": kafkaMessage.Partition,
 		"offset":    kafkaMessage.Offset,
 	})
-	sessionSeq, err := nextMessageSessionSeq(chatMessageReq.SendId, chatMessageReq.ReceiveId)
+	sessionSeq, seqMode, err := nextMessageSessionSeqDetail(chatMessageReq.SendId, chatMessageReq.ReceiveId)
 	observeKafkaConsumerStage(kafkaMessage, "session_seq", seqStart)
 	if err != nil {
+		if dlqErr := writeKafkaMessageToDLQ(kafkaMessage, &decoded, "session_seq", true, err); dlqErr != nil {
+			zlog.Error(dlqErr.Error())
+		}
 		return retryableConsumerError("session_seq", err)
 	}
 	pressure.ObserveBenchmarkEvent(chatMessageReq.MessageId, "session_seq_done", map[string]interface{}{
 		"topic":     kafkaMessage.Topic,
 		"partition": kafkaMessage.Partition,
 		"offset":    kafkaMessage.Offset,
+		"seq_mode":  seqMode,
 	})
 
 	message := model.Message{
@@ -166,6 +170,9 @@ func handleDecodedConsumedMessage(k *KafkaServer, decoded decodedConsumedMessage
 
 	switch {
 	case len(message.ReceiveId) == 0:
+		if dlqErr := writeKafkaMessageToDLQ(kafkaMessage, &decoded, "route", false, errors.New("receive_id is empty")); dlqErr != nil {
+			zlog.Error(dlqErr.Error())
+		}
 		return nonRetryableConsumerError("route", errors.New("receive_id is empty"))
 	case message.ReceiveId[0] == 'U':
 		switch chatMessageReq.Type {
@@ -187,12 +194,16 @@ func handleDecodedConsumedMessage(k *KafkaServer, decoded decodedConsumedMessage
 			}
 			jsonMessage, err := json.Marshal(messageRsp)
 			if err != nil {
+				if dlqErr := writeDispatchFailureToDLQ("websocket_dispatch", message, chatMessageReq.SendAvatar, err); dlqErr != nil {
+					zlog.Error(dlqErr.Error())
+				}
 				return retryableConsumerError("websocket_dispatch", err)
 			}
 			logMessageDispatch("kafka", "user", &message, len(jsonMessage))
 			dispatchStart := time.Now()
 			k.dispatchToKafkaRecipients([]string{message.ReceiveId, message.SendId}, jsonMessage, messageBackUUID)
 			observeKafkaConsumerStage(kafkaMessage, "websocket_dispatch", dispatchStart)
+			completeIngressIdempotencyResult(message.SendId, message.Uuid, mustMarshalIngressReplayPayload(messageRsp))
 
 			cacheKey := "message_list_" + message.SendId + "_" + message.ReceiveId
 			redisReadStart := time.Now()
@@ -242,15 +253,22 @@ func handleDecodedConsumedMessage(k *KafkaServer, decoded decodedConsumedMessage
 			}
 			jsonMessage, err := json.Marshal(messageRsp)
 			if err != nil {
+				if dlqErr := writeDispatchFailureToDLQ("websocket_dispatch", message, message.SendAvatar, err); dlqErr != nil {
+					zlog.Error(dlqErr.Error())
+				}
 				return retryableConsumerError("websocket_dispatch", err)
 			}
 			logMessageDispatch("kafka", "user", &message, len(jsonMessage))
 			dispatchStart := time.Now()
 			k.dispatchToKafkaRecipients([]string{message.ReceiveId}, jsonMessage, messageBackUUID)
 			observeKafkaConsumerStage(kafkaMessage, "websocket_dispatch", dispatchStart)
+			completeIngressIdempotencyResult(message.SendId, message.Uuid, mustMarshalIngressReplayPayload(messageRsp))
 		}
 	case message.ReceiveId[0] == 'G':
 		if chatMessageReq.Type == message_type_enum.AudioOrVideo {
+			if dlqErr := writeKafkaMessageToDLQ(kafkaMessage, &decoded, "route", false, errors.New("group audio/video is not supported")); dlqErr != nil {
+				zlog.Error(dlqErr.Error())
+			}
 			return nonRetryableConsumerError("route", errors.New("group audio/video is not supported"))
 		}
 		if useGroupAsyncPipeline {
@@ -262,8 +280,20 @@ func handleDecodedConsumedMessage(k *KafkaServer, decoded decodedConsumedMessage
 			observeKafkaConsumerStage(kafkaMessage, "group_async_enqueue", enqueueStart)
 			return nil
 		}
-		return k.handleConsumedGroupMessage(kafkaMessage, &message, chatMessageReq.SendAvatar, messageBackUUID)
+		if err := k.handleConsumedGroupMessage(kafkaMessage, &message, chatMessageReq.SendAvatar, messageBackUUID); err != nil {
+			stage, retryable := consumerErrorMeta(err)
+			if retryable && (stage == "group_member_query" || stage == "websocket_dispatch") {
+				if dlqErr := writeDispatchFailureToDLQ(stage, message, chatMessageReq.SendAvatar, err); dlqErr != nil {
+					zlog.Error(dlqErr.Error())
+				}
+			}
+			return err
+		}
+		return nil
 	default:
+		if dlqErr := writeKafkaMessageToDLQ(kafkaMessage, &decoded, "route", false, fmt.Errorf("unsupported receive_id: %s", message.ReceiveId)); dlqErr != nil {
+			zlog.Error(dlqErr.Error())
+		}
 		return nonRetryableConsumerError("route", fmt.Errorf("unsupported receive_id: %s", message.ReceiveId))
 	}
 	return nil

@@ -188,6 +188,44 @@
                   删除/解散群聊</el-menu-item
                 >
               </el-sub-menu>
+              <el-sub-menu index="3">
+                <template #title>
+                  <svg
+                    t="1736823667081"
+                    class="manager-group-icon"
+                    viewBox="0 0 1024 1024"
+                    version="1.1"
+                    xmlns="http://www.w3.org/2000/svg"
+                    p-id="10001"
+                    width="200"
+                    height="200"
+                  >
+                    <path
+                      d="M512 85.333333a341.333333 341.333333 0 1 1 0 682.666667 341.333333 341.333333 0 0 1 0-682.666667z m0 85.333334a256 256 0 1 0 0 512 256 256 0 0 0 0-512z m42.666667 128v170.666666h128v85.333334h-213.333334V298.666667h85.333334z"
+                      fill="#2c2c2c"
+                    ></path>
+                  </svg>
+                  <span class="manager-group-title">DLQ 治理</span>
+                </template>
+                <el-menu-item index="3-1" @click="showDLQGovernanceTable">
+                  <svg
+                    t="1736823667082"
+                    class="menu-item-icon"
+                    viewBox="0 0 1024 1024"
+                    version="1.1"
+                    xmlns="http://www.w3.org/2000/svg"
+                    p-id="10002"
+                    width="200"
+                    height="200"
+                  >
+                    <path
+                      d="M128 128h768v85.333333H128V128z m0 256h768v85.333333H128V384z m0 256h512v85.333333H128v-85.333333z"
+                      fill="#444444"
+                    ></path>
+                  </svg>
+                  故障治理窗口
+                </el-menu-item>
+              </el-sub-menu>
             </el-menu>
           </el-aside>
           <el-main class="manager-main-container"> 
@@ -196,6 +234,7 @@
             <SetAdminModal :isVisible="isSetAdminModalVisible"></SetAdminModal>
             <DeleteGroupModal :isVisible="isDeleteGroupModalVisible"></DeleteGroupModal>
             <DisableGroupModal :isVisible="isDisableGroupModalVisible"></DisableGroupModal>
+            <DLQGovernanceModal :isVisible="isDLQGovernanceModalVisible"></DLQGovernanceModal>
           </el-main>
         </el-container>
       </el-container>
@@ -217,6 +256,7 @@ import DeleteUserModal from "@/components/DeleteUserModal.vue";
 import SetAdminModal from "@/components/SetAdminModal.vue";
 import DeleteGroupModal from "@/components/DeleteGroupModal.vue";
 import DisableGroupModal from "@/components/DisableGroupModal.vue";
+import DLQGovernanceModal from "@/components/DLQGovernanceModal.vue";
 import { ElMessage } from "element-plus";
 export default {
   name: "Manager",
@@ -226,6 +266,7 @@ export default {
     SetAdminModal,
     DeleteGroupModal,
     DisableGroupModal,
+    DLQGovernanceModal,
   },
   setup() {
     const router = useRouter();
@@ -235,6 +276,7 @@ export default {
       isSetAdminModalVisible: false,
       isDeleteGroupModalVisible: false,
       isDisableGroupModalVisible: false,
+      isDLQGovernanceModalVisible: false,
     });
     const showDisableUserTable = () => {
       data.isDisableUserModalVisible = true;
@@ -242,6 +284,7 @@ export default {
       data.isSetAdminModalVisible = false;
       data.isDeleteGroupModalVisible = false;
       data.isDisableGroupModalVisible = false;
+      data.isDLQGovernanceModalVisible = false;
     };
 
     const showDeleteUserTable = () => {
@@ -250,6 +293,7 @@ export default {
       data.isSetAdminModalVisible = false;
       data.isDeleteGroupModalVisible = false;
       data.isDisableGroupModalVisible = false;
+      data.isDLQGovernanceModalVisible = false;
     }
 
     const showSetAdminTable = () => {
@@ -258,6 +302,7 @@ export default {
       data.isDisableUserModalVisible = false;
       data.isDeleteGroupModalVisible = false;
       data.isDisableGroupModalVisible = false;
+      data.isDLQGovernanceModalVisible = false;
     }
 
     const showDeleteGroupTable = () => {
@@ -266,6 +311,7 @@ export default {
       data.isDisableUserModalVisible = false;
       data.isDeleteGroupModalVisible = true;
       data.isDisableGroupModalVisible = false;
+      data.isDLQGovernanceModalVisible = false;
     };
 
     const showDisableGroupTable = () => {
@@ -274,6 +320,16 @@ export default {
       data.isDisableUserModalVisible = false;
       data.isDeleteGroupModalVisible = false;
       data.isDisableGroupModalVisible = true;
+      data.isDLQGovernanceModalVisible = false;
+    };
+
+    const showDLQGovernanceTable = () => {
+      data.isSetAdminModalVisible = false;
+      data.isDeleteUserModalVisible = false;
+      data.isDisableUserModalVisible = false;
+      data.isDeleteGroupModalVisible = false;
+      data.isDisableGroupModalVisible = false;
+      data.isDLQGovernanceModalVisible = true;
     };
 
     const backToChat = () => {
@@ -288,6 +344,7 @@ export default {
       showSetAdminTable,
       showDeleteGroupTable,
       showDisableGroupTable,
+      showDLQGovernanceTable,
       backToChat,
     };
   },

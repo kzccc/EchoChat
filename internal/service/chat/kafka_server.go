@@ -12,10 +12,6 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/IBM/sarama"
-	"github.com/go-redis/redis/v8"
-	"github.com/gorilla/websocket"
-	"go.uber.org/zap"
 	"echo_chat_server/internal/config"
 	"echo_chat_server/internal/dao"
 	"echo_chat_server/internal/dto/request"
@@ -26,9 +22,10 @@ import (
 	"echo_chat_server/internal/service/kafka"
 	myredis "echo_chat_server/internal/service/redis"
 	"echo_chat_server/pkg/constants"
-	"echo_chat_server/pkg/enum/message/message_status_enum"
-	"echo_chat_server/pkg/enum/message/message_type_enum"
 	"echo_chat_server/pkg/zlog"
+	"github.com/IBM/sarama"
+	"github.com/go-redis/redis/v8"
+	"go.uber.org/zap"
 )
 
 type KafkaServer struct {
@@ -133,11 +130,12 @@ func (k *KafkaServer) Start() {
 				k.Clients[client.Uuid] = client
 				k.mutex.Unlock()
 				k.registerClientRoute(client)
+				k.renewClientRoute(client, time.Now())
 				if pressure.ShouldLogHotPath(client.Benchmark) {
 					zlog.Info("ws.connection.login", client.wsFields(zap.String("event", "ws.connection.login"), zap.String("module", "chat.kafka"))...)
 				}
 				if !client.Benchmark {
-					err := client.Conn.WriteMessage(websocket.TextMessage, []byte("欢迎来到EchoChat聊天服务器"))
+					err := client.writeText([]byte("欢迎来到EchoChat聊天服务器"))
 					if err != nil {
 						zlog.Error(err.Error())
 					}
@@ -151,7 +149,7 @@ func (k *KafkaServer) Start() {
 				k.mutex.Unlock()
 				k.unregisterClientRoute(client)
 				zlog.Info("ws.connection.logout", client.wsFields(zap.String("event", "ws.connection.logout"), zap.String("module", "chat.kafka"))...)
-				if err := client.Conn.WriteMessage(websocket.TextMessage, []byte("已退出登录")); err != nil {
+				if err := client.writeText([]byte("已退出登录")); err != nil {
 					zlog.Error(err.Error())
 				}
 			}
@@ -274,6 +272,24 @@ func (h *kafkaChatConsumerHandler) ConsumeClaim(session sarama.ConsumerGroupSess
 			)
 			if err != nil {
 				stage, retryable := consumerErrorMeta(err)
+				messageID := messageIDFromKafkaHeaders(kafkaMessage)
+				if !retryable {
+					var req request.ChatMessageRequest
+					if decodeErr := json.Unmarshal(kafkaMessage.Value, &req); decodeErr == nil && req.SendId != "" {
+						resolvedMessageID := messageID
+						if resolvedMessageID == "" {
+							resolvedMessageID = req.MessageId
+						}
+						if resolvedMessageID != "" {
+							clearIngressIdempotencyPending(req.SendId, ensureMessageID(resolvedMessageID))
+						}
+					}
+				}
+				if !retryable {
+					if dlqErr := writeKafkaMessageToDLQ(kafkaMessage, nil, stage, false, err); dlqErr != nil {
+						zlog.Error(dlqErr.Error())
+					}
+				}
 				observability.ObserveKafkaConsumeFailure(consumerGroup, kafkaMessage.Topic, kafkaMessage.Partition, stage)
 				result := "non_retryable_failure"
 				if retryable {
@@ -338,205 +354,11 @@ func (k *KafkaServer) consumeClaimPartitionAsync(session sarama.ConsumerGroupSes
 }
 
 func (k *KafkaServer) handleConsumedMessage(kafkaMessage *sarama.ConsumerMessage) error {
-	data := kafkaMessage.Value
-	var chatMessageReq request.ChatMessageRequest
-	decodeStart := time.Now()
-	if err := json.Unmarshal(data, &chatMessageReq); err != nil {
-		observeKafkaConsumerStage(kafkaMessage, "deserialize", decodeStart)
-		zlog.Error(
-			"message.decode.failed",
-			zap.String("event", "message.decode.failed"),
-			zap.String("module", "chat.kafka"),
-			zap.Int("payload_size", len(data)),
-			zap.String("error", err.Error()),
-		)
-		return nonRetryableConsumerError("deserialize", err)
-	}
-	observeKafkaConsumerStage(kafkaMessage, "deserialize", decodeStart)
-	chatMessageReq.MessageId = ensureMessageID(chatMessageReq.MessageId)
-	if chatMessageReq.SendId == "" || chatMessageReq.ReceiveId == "" {
-		return nonRetryableConsumerError("route", errors.New("send_id or receive_id is empty"))
-	}
-
-	seqStart := time.Now()
-	sessionSeq, err := nextMessageSessionSeq(chatMessageReq.SendId, chatMessageReq.ReceiveId)
-	observeKafkaConsumerStage(kafkaMessage, "session_seq", seqStart)
+	decoded, err := decodeConsumedMessage(kafkaMessage)
 	if err != nil {
-		return retryableConsumerError("session_seq", err)
+		return err
 	}
-
-	message := model.Message{
-		Uuid:       chatMessageReq.MessageId,
-		SessionId:  chatMessageReq.SessionId,
-		Type:       chatMessageReq.Type,
-		Content:    chatMessageReq.Content,
-		Url:        chatMessageReq.Url,
-		SendId:     chatMessageReq.SendId,
-		SendName:   chatMessageReq.SendName,
-		SendAvatar: normalizePath(chatMessageReq.SendAvatar),
-		ReceiveId:  chatMessageReq.ReceiveId,
-		ConversationKey: model.BuildConversationKey(
-			chatMessageReq.SendId,
-			chatMessageReq.ReceiveId,
-		),
-		FileSize:   chatMessageReq.FileSize,
-		FileType:   chatMessageReq.FileType,
-		FileName:   chatMessageReq.FileName,
-		Status:     message_status_enum.Unsent,
-		SessionSeq: sessionSeq,
-		CreatedAt:  time.Now(),
-		AVdata:     chatMessageReq.AVdata,
-	}
-
-	switch chatMessageReq.Type {
-	case message_type_enum.Text:
-		message.Url = ""
-		message.FileSize = "0B"
-		message.FileType = ""
-		message.FileName = ""
-	case message_type_enum.File:
-		message.Content = ""
-	case message_type_enum.AudioOrVideo:
-		message.Content = ""
-		message.Url = ""
-		message.FileSize = ""
-		message.FileType = ""
-		message.FileName = ""
-	default:
-		return nonRetryableConsumerError("route", fmt.Errorf("unsupported message type: %d", chatMessageReq.Type))
-	}
-
-	shouldPersist := chatMessageReq.Type != message_type_enum.AudioOrVideo
-	if chatMessageReq.Type == message_type_enum.AudioOrVideo {
-		var avData request.AVData
-		if err := json.Unmarshal([]byte(chatMessageReq.AVdata), &avData); err != nil {
-			return nonRetryableConsumerError("deserialize", err)
-		}
-		shouldPersist = avData.MessageId == "PROXY" && (avData.Type == "start_call" || avData.Type == "receive_call" || avData.Type == "reject_call")
-	}
-
-	messageBackUUID := ""
-	useGroupAsyncPipeline := len(message.ReceiveId) > 0 &&
-		message.ReceiveId[0] == 'G' &&
-		config.GetConfig().KafkaConfig.UseGroupAsyncPipelineExperimental()
-	if shouldPersist && !useGroupAsyncPipeline {
-		mysqlStart := time.Now()
-		alreadyProcessed, persisted, err := saveKafkaMessage(&message)
-		observeKafkaConsumerStage(kafkaMessage, "mysql_persist", mysqlStart)
-		if err != nil {
-			return retryableConsumerError("mysql_persist", err)
-		}
-		if alreadyProcessed {
-			return nil
-		}
-		if persisted {
-			messageBackUUID = message.Uuid
-		}
-	}
-
-	switch {
-	case len(message.ReceiveId) == 0:
-		return nonRetryableConsumerError("route", errors.New("receive_id is empty"))
-	case message.ReceiveId[0] == 'U':
-		switch chatMessageReq.Type {
-		case message_type_enum.Text, message_type_enum.File:
-			messageRsp := respond.GetMessageListRespond{
-				MessageId:  message.Uuid,
-				SendId:     message.SendId,
-				SendName:   message.SendName,
-				SendAvatar: chatMessageReq.SendAvatar,
-				ReceiveId:  message.ReceiveId,
-				Type:       message.Type,
-				Content:    message.Content,
-				Url:        message.Url,
-				FileSize:   message.FileSize,
-				FileName:   message.FileName,
-				FileType:   message.FileType,
-				SessionSeq: message.SessionSeq,
-				CreatedAt:  message.CreatedAt.Format("2006-01-02 15:04:05"),
-			}
-			jsonMessage, err := json.Marshal(messageRsp)
-			if err != nil {
-				return retryableConsumerError("websocket_dispatch", err)
-			}
-			logMessageDispatch("kafka", "user", &message, len(jsonMessage))
-			dispatchStart := time.Now()
-			k.dispatchToKafkaRecipients([]string{message.ReceiveId, message.SendId}, jsonMessage, messageBackUUID)
-			observeKafkaConsumerStage(kafkaMessage, "websocket_dispatch", dispatchStart)
-
-			cacheKey := "message_list_" + message.SendId + "_" + message.ReceiveId
-			redisReadStart := time.Now()
-			rspString, redisErr := myredis.GetKeyNilIsErr(cacheKey)
-			observeKafkaConsumerStage(kafkaMessage, "redis_read", redisReadStart)
-			if redisErr == nil {
-				var rsp []respond.GetMessageListRespond
-				if err := json.Unmarshal([]byte(rspString), &rsp); err != nil {
-					zlog.Error(err.Error())
-				} else {
-					rsp, _ = appendUniqueUserCacheMessage(cacheKey, rsp, messageRsp, "kafka")
-					rspByte, err := json.Marshal(rsp)
-					if err != nil {
-						zlog.Error(err.Error())
-					} else {
-						redisWriteStart := time.Now()
-						err = myredis.SetKeyEx(cacheKey, string(rspByte), time.Minute*constants.REDIS_TIMEOUT)
-						observeKafkaConsumerStage(kafkaMessage, "redis_write", redisWriteStart)
-						if err != nil {
-							observability.ObserveKafkaConsumeFailure(config.GetConfig().KafkaConfig.ResolveConsumerGroup(), kafkaMessage.Topic, kafkaMessage.Partition, "redis_write")
-							zlog.Error(err.Error())
-						} else {
-							logMessageCacheUpdate("kafka", cacheKey, len(rsp))
-						}
-					}
-				}
-			} else if !errors.Is(redisErr, redis.Nil) {
-				observability.ObserveKafkaConsumeFailure(config.GetConfig().KafkaConfig.ResolveConsumerGroup(), kafkaMessage.Topic, kafkaMessage.Partition, "redis_read")
-				zlog.Error(redisErr.Error())
-			}
-		case message_type_enum.AudioOrVideo:
-			messageRsp := respond.AVMessageRespond{
-				MessageId:  message.Uuid,
-				SendId:     message.SendId,
-				SendName:   message.SendName,
-				SendAvatar: message.SendAvatar,
-				ReceiveId:  message.ReceiveId,
-				Type:       message.Type,
-				Content:    message.Content,
-				Url:        message.Url,
-				FileSize:   message.FileSize,
-				FileName:   message.FileName,
-				FileType:   message.FileType,
-				SessionSeq: message.SessionSeq,
-				CreatedAt:  message.CreatedAt.Format("2006-01-02 15:04:05"),
-				AVdata:     message.AVdata,
-			}
-			jsonMessage, err := json.Marshal(messageRsp)
-			if err != nil {
-				return retryableConsumerError("websocket_dispatch", err)
-			}
-			logMessageDispatch("kafka", "user", &message, len(jsonMessage))
-			dispatchStart := time.Now()
-			k.dispatchToKafkaRecipients([]string{message.ReceiveId}, jsonMessage, messageBackUUID)
-			observeKafkaConsumerStage(kafkaMessage, "websocket_dispatch", dispatchStart)
-		}
-	case message.ReceiveId[0] == 'G':
-		if chatMessageReq.Type == message_type_enum.AudioOrVideo {
-			return nonRetryableConsumerError("route", errors.New("group audio/video is not supported"))
-		}
-		if useGroupAsyncPipeline {
-			enqueueStart := time.Now()
-			if err := k.enqueueConsumedGroupMessage(message, chatMessageReq.SendAvatar); err != nil {
-				observeKafkaConsumerStage(kafkaMessage, "group_async_enqueue", enqueueStart)
-				return retryableConsumerError("group_async_enqueue", err)
-			}
-			observeKafkaConsumerStage(kafkaMessage, "group_async_enqueue", enqueueStart)
-			return nil
-		}
-		return k.handleConsumedGroupMessage(kafkaMessage, &message, chatMessageReq.SendAvatar, messageBackUUID)
-	default:
-		return nonRetryableConsumerError("route", fmt.Errorf("unsupported receive_id: %s", message.ReceiveId))
-	}
-	return nil
+	return handleDecodedConsumedMessage(k, decoded)
 }
 
 func (k *KafkaServer) handleConsumedGroupMessage(
@@ -596,6 +418,7 @@ func (k *KafkaServer) handleConsumedGroupMessage(
 	}
 	k.dispatchToKafkaRecipients(recipientIDs, jsonMessage, messageBackUUID)
 	observeStage("websocket_dispatch", dispatchStart)
+	completeIngressIdempotencyResult(message.SendId, message.Uuid, mustMarshalIngressReplayPayload(messageRsp))
 
 	if config.GetConfig().KafkaConfig.UseGroupAsyncPipelineExperimental() {
 		cacheInvalidateStart := time.Now()
@@ -698,6 +521,7 @@ func (k *KafkaServer) closeClientsGracefully(message string) {
 		time.Sleep(100 * time.Millisecond)
 	}
 	for _, client := range clients {
+		k.unregisterClientRoute(client)
 		client.Close()
 	}
 }

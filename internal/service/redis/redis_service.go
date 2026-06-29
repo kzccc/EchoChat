@@ -4,13 +4,13 @@ package redis
 
 import (
 	"context"
+	"echo_chat_server/internal/config"
+	"echo_chat_server/internal/observability"
+	"echo_chat_server/pkg/zlog"
 	"errors"
 	"fmt"
 	"github.com/go-redis/redis/v8"
 	"go.uber.org/zap"
-	"echo_chat_server/internal/config"
-	"echo_chat_server/internal/observability"
-	"echo_chat_server/pkg/zlog"
 	"strconv"
 	"time"
 )
@@ -38,6 +38,17 @@ end
 return redis.call("INCR", KEYS[1])
 `)
 
+var delKeyIfValueMatchesScript = redis.NewScript(`
+local current = redis.call("GET", KEYS[1])
+if not current then
+  return 0
+end
+if current ~= ARGV[1] then
+  return 0
+end
+return redis.call("DEL", KEYS[1])
+`)
+
 // init 根据配置文件初始化 Redis 连接。
 func init() {
 	conf := config.GetConfig()
@@ -52,6 +63,15 @@ func init() {
 		Password: password,
 		DB:       db,
 	})
+}
+
+// SetClientForTest 仅用于测试阶段临时替换全局 Redis 客户端。
+func SetClientForTest(client *redis.Client) func() {
+	previous := redisClient
+	redisClient = client
+	return func() {
+		redisClient = previous
+	}
 }
 
 // SetKeyEx 写入带过期时间的字符串键值。
@@ -252,29 +272,34 @@ func DelKeyIfExists(key string) error {
 	return nil
 }
 
+// KeyExists 返回 key 是否存在。
+func KeyExists(key string) (bool, error) {
+	start := time.Now()
+	exists, err := redisClient.Exists(ctx, key).Result()
+	if err != nil {
+		observability.ObserveRedisCommand("exists", time.Since(start), "failure")
+		return false, err
+	}
+	observability.ObserveRedisCommand("exists", time.Since(start), "success")
+	return exists > 0, nil
+}
+
 // DelKeyIfValueMatches 仅在 key 当前值与 expectedValue 相等时删除，避免误删被其他实例接管后的路由。
 func DelKeyIfValueMatches(key string, expectedValue string) error {
 	start := time.Now()
-	value, err := redisClient.Get(ctx, key).Result()
+	_, err := delKeyIfValueMatchesScript.Run(ctx, redisClient, []string{key}, expectedValue).Int()
+	result := "success"
 	if err != nil {
 		if errors.Is(err, redis.Nil) {
-			observability.ObserveRedisCommand("get", time.Since(start), "not_found")
-			return nil
+			result = "not_found"
+		} else {
+			result = "failure"
 		}
-		observability.ObserveRedisCommand("get", time.Since(start), "failure")
+	}
+	observability.ObserveRedisCommand("eval_compare_del", time.Since(start), result)
+	if err != nil && !errors.Is(err, redis.Nil) {
 		return err
 	}
-	observability.ObserveRedisCommand("get", time.Since(start), "success")
-	if value != expectedValue {
-		return nil
-	}
-
-	delStart := time.Now()
-	if err := redisClient.Del(ctx, key).Err(); err != nil {
-		observability.ObserveRedisCommand("del", time.Since(delStart), "failure")
-		return err
-	}
-	observability.ObserveRedisCommand("del", time.Since(delStart), "success")
 	return nil
 }
 

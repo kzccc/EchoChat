@@ -247,6 +247,15 @@ def configured_pressure_window_ms(cfg: dict, summary: dict, send_times_ms: list[
     return None
 
 
+def window_observed_throughput(summary: dict, pressure_window_ms: float | None) -> float | None:
+    received_before_drain = summary.get("received_messages_before_drain", summary.get("received_messages"))
+    if not isinstance(received_before_drain, (int, float)):
+        return None
+    if not isinstance(pressure_window_ms, (int, float)) or pressure_window_ms <= 0:
+        return None
+    return float(received_before_drain) / (float(pressure_window_ms) / 1000.0)
+
+
 def _build_meta_and_events(trace: dict) -> tuple[dict[str, dict], dict[str, dict[str, list[dict]]], list[dict]]:
     meta_by_id: dict[str, dict] = {}
     for meta in trace.get("messages", []):
@@ -1036,8 +1045,14 @@ def analyze(summary: dict, trace: dict, cfg: dict) -> dict:
         share = count / total_partition_msgs if total_partition_msgs else 0
         partition_rows.append({"partition": partition, "message_count": count, "share": round(share, 6)})
 
+    normalized_summary = dict(summary)
+    window_throughput = window_observed_throughput(summary, pressure_window_ms)
+    if window_throughput is not None:
+        normalized_summary["observed_throughput_msg_per_sec"] = round(window_throughput, 3)
+        normalized_summary["window_observed_throughput_msg_per_sec"] = round(window_throughput, 3)
+
     return {
-        "summary": summary,
+        "summary": normalized_summary,
         "stage_metrics": stage_summary,
         "persist": persist_summary,
         "partition_rows": partition_rows,
@@ -1300,8 +1315,8 @@ def _write_11(bundle_dir: Path, analysis: dict, cfg: dict) -> None:
         axes[0],
         [
             f"expected {nice_number(expected, 0)}",
-            f"duration {nice_number(summary.get('duration_sec'))}s",
-            f"observed {nice_number(summary.get('observed_throughput_msg_per_sec'))} msg/s",
+            f"window {nice_number(summary.get('duration_sec'))}s",
+            f"observed(window) {nice_number(summary.get('observed_throughput_msg_per_sec'))} msg/s",
             f"p95 {nice_number(first_field(summary.get('latency'), 'p95_ms'))}ms",
             f"p99 {nice_number(first_field(summary.get('latency'), 'p99_ms'))}ms",
         ],

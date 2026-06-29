@@ -4,21 +4,42 @@ package dao
 
 import (
 	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
 
-	"gorm.io/driver/mysql"
-	"gorm.io/gorm"
-	"gorm.io/gorm/logger"
 	"echo_chat_server/internal/config"
 	"echo_chat_server/internal/model"
 	"echo_chat_server/pkg/zlog"
+	"gorm.io/driver/mysql"
+	"gorm.io/gorm"
+	"gorm.io/gorm/logger"
 	"time"
 )
 
 // GormDB 是整个服务共享的数据库连接句柄。
 var GormDB *gorm.DB
 
+func shouldSkipDBInit() bool {
+	if os.Getenv("ECHOCHAT_SKIP_DAO_INIT") == "1" {
+		return true
+	}
+	return isRunningUnderGoTest()
+}
+
+func isRunningUnderGoTest() bool {
+	if len(os.Args) == 0 {
+		return false
+	}
+	executableName := filepath.Base(os.Args[0])
+	return strings.HasSuffix(executableName, ".test")
+}
+
 // init 在进程启动时建立数据库连接并自动迁移核心表结构。
 func init() {
+	if shouldSkipDBInit() {
+		return
+	}
 	conf := config.GetConfig()
 	user := conf.MysqlConfig.User
 	password := conf.MysqlConfig.Password
@@ -66,7 +87,17 @@ func init() {
 	sqlDB.SetConnMaxLifetime(connMaxLifetime)
 	sqlDB.SetConnMaxIdleTime(connMaxIdleTime)
 	// AutoMigrate 只负责补齐/更新表结构，不会清空已有业务数据。
-	err = GormDB.AutoMigrate(&model.UserInfo{}, &model.GroupInfo{}, &model.UserContact{}, &model.Session{}, &model.ContactApply{}, &model.Message{}, &model.ConversationSequence{}) // 自动迁移，如果没有建表，会自动创建对应的表
+	err = GormDB.AutoMigrate(
+		&model.UserInfo{},
+		&model.GroupInfo{},
+		&model.UserContact{},
+		&model.Session{},
+		&model.ContactApply{},
+		&model.Message{},
+		&model.ConversationSequence{},
+		&model.DLQMessage{},
+		&model.DLQOperationLog{},
+	) // 自动迁移，如果没有建表，会自动创建对应的表
 	if err != nil {
 		zlog.Fatal(err.Error())
 	}

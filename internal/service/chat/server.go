@@ -4,12 +4,6 @@ package chat
 
 import (
 	"context"
-	"encoding/json"
-	"errors"
-	"fmt"
-	"github.com/go-redis/redis/v8"
-	"github.com/gorilla/websocket"
-	"go.uber.org/zap"
 	"echo_chat_server/internal/dao"
 	"echo_chat_server/internal/dto/request"
 	"echo_chat_server/internal/dto/respond"
@@ -19,8 +13,11 @@ import (
 	"echo_chat_server/pkg/constants"
 	"echo_chat_server/pkg/enum/message/message_status_enum"
 	"echo_chat_server/pkg/enum/message/message_type_enum"
-	"echo_chat_server/pkg/util/random"
 	"echo_chat_server/pkg/zlog"
+	"encoding/json"
+	"errors"
+	"github.com/go-redis/redis/v8"
+	"go.uber.org/zap"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -123,7 +120,7 @@ func (s *Server) Start() {
 					zlog.Info("ws.connection.login", client.wsFields(zap.String("event", "ws.connection.login"), zap.String("module", "chat.channel"))...)
 				}
 				if !client.Benchmark {
-					err := client.Conn.WriteMessage(websocket.TextMessage, []byte("欢迎来到EchoChat聊天服务器"))
+					err := client.writeText([]byte("欢迎来到EchoChat聊天服务器"))
 					if err != nil {
 						zlog.Error(err.Error())
 					}
@@ -137,7 +134,7 @@ func (s *Server) Start() {
 				delete(s.Clients, client.Uuid)
 				s.mutex.Unlock()
 				zlog.Info("ws.connection.logout", client.wsFields(zap.String("event", "ws.connection.logout"), zap.String("module", "chat.channel"))...)
-				if err := client.Conn.WriteMessage(websocket.TextMessage, []byte("已退出登录")); err != nil {
+				if err := client.writeText([]byte("已退出登录")); err != nil {
 					zlog.Error(err.Error())
 				}
 			}
@@ -167,7 +164,7 @@ func (s *Server) Start() {
 						continue
 					}
 					message := model.Message{
-						Uuid:       fmt.Sprintf("M%s", random.GetNowAndLenRandomString(11)),
+						Uuid:       chatMessageReq.MessageId,
 						SessionId:  chatMessageReq.SessionId,
 						Type:       chatMessageReq.Type,
 						Content:    chatMessageReq.Content,
@@ -192,6 +189,8 @@ func (s *Server) Start() {
 					message.SendAvatar = normalizePath(message.SendAvatar)
 					if res := dao.GormDB.Create(&message); res.Error != nil {
 						zlog.Error(res.Error.Error())
+						clearIngressIdempotencyPending(message.SendId, message.Uuid)
+						continue
 					}
 					logMessagePersist("channel", &message)
 
@@ -271,6 +270,7 @@ func (s *Server) Start() {
 								zlog.Error(err.Error())
 							}
 						}
+						completeIngressIdempotencyResult(message.SendId, message.Uuid, mustMarshalIngressReplayPayload(messageRsp))
 
 					} else if message.ReceiveId[0] == 'G' { // 发送给Group
 						// 群聊场景会查出群成员，并对在线成员逐个回推。
@@ -347,6 +347,7 @@ func (s *Server) Start() {
 								zlog.Error(err.Error())
 							}
 						}
+						completeIngressIdempotencyResult(message.SendId, message.Uuid, mustMarshalIngressReplayPayload(messageRsp))
 					}
 				} else if chatMessageReq.Type == message_type_enum.File {
 					//? 文件消息与文本消息流程基本一致，只是展示字段换成文件信息。
@@ -356,7 +357,7 @@ func (s *Server) Start() {
 						continue
 					}
 					message := model.Message{
-						Uuid:       fmt.Sprintf("M%s", random.GetNowAndLenRandomString(11)),
+						Uuid:       chatMessageReq.MessageId,
 						SessionId:  chatMessageReq.SessionId,
 						Type:       chatMessageReq.Type,
 						Content:    "",
@@ -381,6 +382,8 @@ func (s *Server) Start() {
 					message.SendAvatar = normalizePath(message.SendAvatar)
 					if res := dao.GormDB.Create(&message); res.Error != nil {
 						zlog.Error(res.Error.Error())
+						clearIngressIdempotencyPending(message.SendId, message.Uuid)
+						continue
 					}
 					logMessagePersist("channel", &message)
 					//? 进一步判断是否单聊
@@ -447,6 +450,7 @@ func (s *Server) Start() {
 								zlog.Error(err.Error())
 							}
 						}
+						completeIngressIdempotencyResult(message.SendId, message.Uuid, mustMarshalIngressReplayPayload(messageRsp))
 					} else {
 						//? 先构造群聊文件消息的响应体，这个结构是前端 messageList 真正要消费的数据格式
 						messageRsp := respond.GetGroupMessageListRespond{
@@ -529,6 +533,7 @@ func (s *Server) Start() {
 								zlog.Error(err.Error())
 							}
 						}
+						completeIngressIdempotencyResult(message.SendId, message.Uuid, mustMarshalIngressReplayPayload(messageRsp))
 					}
 				} else if chatMessageReq.Type == message_type_enum.AudioOrVideo {
 					// 音视频消息主要承载信令数据，只有部分事件需要持久化留痕。
@@ -543,7 +548,7 @@ func (s *Server) Start() {
 					}
 					//log.Println(avData)
 					message := model.Message{
-						Uuid:       fmt.Sprintf("M%s", random.GetNowAndLenRandomString(11)),
+						Uuid:       chatMessageReq.MessageId,
 						SessionId:  chatMessageReq.SessionId,
 						Type:       chatMessageReq.Type,
 						Content:    "",
@@ -569,6 +574,8 @@ func (s *Server) Start() {
 						message.SendAvatar = normalizePath(message.SendAvatar)
 						if res := dao.GormDB.Create(&message); res.Error != nil {
 							zlog.Error(res.Error.Error())
+							clearIngressIdempotencyPending(message.SendId, message.Uuid)
+							continue
 						}
 						logMessagePersist("channel", &message)
 					}
@@ -610,6 +617,7 @@ func (s *Server) Start() {
 						//sendClient := s.Clients[message.SendId]
 						//sendClient.SendBack <- messageBack
 						s.mutex.Unlock()
+						completeIngressIdempotencyResult(message.SendId, message.Uuid, mustMarshalIngressReplayPayload(messageRsp))
 					}
 				}
 

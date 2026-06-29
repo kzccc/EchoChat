@@ -10,15 +10,15 @@ mysql_runtime_root = "./runtime/mysql_isolated" # 压测使用的独立 MySQL �
 database = "echochat_pressure_default" # 默认压测使用的独立数据库名，避免复用历史很重的 echochat 主库
 
 [mainconfig]
-target_rate = 8000 # 挡位，单位为消息每秒
-session_count = 500 # 本轮实际参与压测的单聊会话数
+target_rate = 10000 # 挡位，单位为消息每秒
+session_count = 1000 # 本轮实际参与压测的单聊会话数
 topic_partitions = 10 # 聊天 topic 分区数
 conversation_bucket_worker_count = 50 # 每个 Kafka 分区内部固定 worker pool 的 worker 数
 conversation_bucket_ready_queue_size = 1024 # 每个 Kafka 分区内部 ready queue 的缓冲长度
 conversation_bucket_bucket_queue_size = 1024 # 每个 conversation bucket 内部消息队列上限
 conversation_bucket_max_messages_per_turn = 16 # 单个 worker 单次从同一个 conversation bucket 连续处理的最大消息数
 conversation_bucket_max_run_duration_ms = 100000000 # 单个 worker 单次从同一个 conversation bucket 连续处理的最长时间，单位为毫秒
-mysql_persist_worker_count = 2 # mysql_persist worker 数量
+mysql_persist_worker_count = 1 # mysql_persist worker 数量
 mysql_persist_batch_size = 300 # mysql_pe、rsist 批量写入的单批大小
 
 [conversation_bucket]
@@ -86,8 +86,8 @@ interval_ms = 250 # Kafka offset 最长提交间隔，单位为毫秒
 
 [persist]
 batch_size = 100 # 兼容旧配置；若 [mainconfig] 存在则以 mainconfig.mysql_persist_batch_size 为准
-first_job_hold_ms = 0.5 # 首条消息进入批次后的额外等待时间，单位为毫秒
-flush_interval_ms = 7 # 批次最长 flush 等待时间，单位为毫秒
+first_job_hold_ms = 300 # 首条消息进入批次后的额外等待时间，单位为毫秒
+flush_interval_ms = 300 # 批次最长 flush 等待时间，单位为毫秒
 worker_count = 1 # 兼容旧配置；若 [mainconfig] 存在则以 mainconfig.mysql_persist_worker_count 为准
 queue_size = 4096 # 每个 mysql_persist worker 的队列容量
 session_seq_redis_only_experimental = false # 是否启用仅依赖 Redis 的 session_seq 实验开关

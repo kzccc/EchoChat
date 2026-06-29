@@ -113,39 +113,46 @@ func resolveConversationRecoveryFloor(highWaterSeq, messageMaxSeq int64) (int64,
 
 // nextMessageSessionSeq 返回当前消息在所属聊天流中的下一个顺序号。
 func nextMessageSessionSeq(sendID, receiveID string) (int64, error) {
+	value, _, err := nextMessageSessionSeqDetail(sendID, receiveID)
+	return value, err
+}
+
+func nextMessageSessionSeqDetail(sendID, receiveID string) (int64, string, error) {
 	scope := buildConversationSequenceScope(sendID, receiveID)
 	redisKey := "message_session_seq_" + scope
 
 	if _, initialized := conversationSeqInitialized.Load(scope); initialized {
 		value, err := myredis.IncrKey(redisKey)
 		if err != nil {
-			return 0, err
+			return 0, "", err
 		}
 		if value == 1 {
 			floor, err := loadConversationPersistedSeq(scope, sendID, receiveID)
 			if err != nil {
-				return 0, err
+				return 0, "", err
 			}
 			value, err = myredis.EnsureMinAndIncr(redisKey, floor)
 			if err != nil {
-				return 0, err
+				return 0, "", err
 			}
+			conversationSequenceTracker.record(scope, value)
+			return value, "redis_floor_recovery", nil
 		}
 		conversationSequenceTracker.record(scope, value)
-		return value, nil
+		return value, "hot_path", nil
 	}
 
 	floor, err := loadConversationPersistedSeq(scope, sendID, receiveID)
 	if err != nil {
-		return 0, err
+		return 0, "", err
 	}
 	value, err := myredis.InitFloorAndIncr(redisKey, floor)
 	if err != nil {
-		return 0, err
+		return 0, "", err
 	}
 	conversationSeqInitialized.Store(scope, struct{}{})
 	conversationSequenceTracker.record(scope, value)
-	return value, nil
+	return value, "cold_start", nil
 }
 
 // BackfillMessageSessionSeq 为历史消息补齐 session_seq，保证旧数据也能按统一顺序展示。
@@ -241,4 +248,13 @@ func (t *conversationSequenceHighWaterTracker) flush() {
 		}
 		t.mu.Unlock()
 	}
+}
+
+func ResetConversationSequenceBenchState() {
+	conversationSeqInitialized = sync.Map{}
+}
+
+func FlushConversationSequenceBenchState() error {
+	conversationSequenceTracker.flush()
+	return nil
 }

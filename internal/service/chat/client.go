@@ -4,12 +4,6 @@ package chat
 
 import (
 	"context"
-	"encoding/json"
-	"errors"
-	"github.com/gin-gonic/gin"
-	"github.com/gorilla/websocket"
-	"go.uber.org/zap"
-	"io"
 	"echo_chat_server/internal/config"
 	"echo_chat_server/internal/dto/request"
 	"echo_chat_server/internal/observability"
@@ -18,6 +12,12 @@ import (
 	"echo_chat_server/pkg/constants"
 	"echo_chat_server/pkg/util/random"
 	"echo_chat_server/pkg/zlog"
+	"encoding/json"
+	"errors"
+	"github.com/gin-gonic/gin"
+	"github.com/gorilla/websocket"
+	"go.uber.org/zap"
+	"io"
 	"net/http"
 	"strings"
 	"sync"
@@ -56,6 +56,15 @@ type Client struct {
 	// CriticalBack 用于承接关键失败提示，避免和普通消息共用同一条可挤爆的回写通道。
 	CriticalBack chan *MessageBack // 给前端
 
+	// connectedAt 是本次 websocket 连接建立时间。
+	connectedAt time.Time
+	// lastActiveAt 记录最近一次有效客户端活动时间。
+	lastActiveAt atomic.Int64
+	// closeReason 记录连接关闭原因，便于排障和观测。
+	closeReason atomic.Pointer[string]
+	// writeMutex 保护 websocket conn 的并发写入。
+	writeMutex sync.Mutex
+
 	closeOnce   sync.Once
 	observeOnce sync.Once
 	cleanupOnce sync.Once
@@ -84,6 +93,78 @@ var messageMode = config.GetConfig().KafkaConfig.MessageMode
 
 func newConnectionID() string {
 	return "WS" + random.GetNowAndLenRandomString(6)
+}
+
+func (c *Client) markActive(now time.Time) {
+	if c == nil {
+		return
+	}
+	c.lastActiveAt.Store(now.UnixNano())
+	if config.GetConfig().KafkaConfig.MessageMode == "kafka" {
+		KafkaChatServer.renewClientRoute(c, now)
+	}
+}
+
+func (c *Client) lastActiveTime() time.Time {
+	nano := c.lastActiveAt.Load()
+	if nano == 0 {
+		return c.connectedAt
+	}
+	return time.Unix(0, nano)
+}
+
+func (c *Client) recordCloseReason(reason string) {
+	if c == nil || reason == "" {
+		return
+	}
+	reasonCopy := reason
+	c.closeReason.CompareAndSwap(nil, &reasonCopy)
+}
+
+func (c *Client) startHeartbeat() {
+	conf := config.GetConfig().KafkaConfig
+	interval := conf.ResolveWSHeartbeatInterval()
+	timeout := conf.ResolveWSSilenceTimeout()
+	if interval <= 0 || timeout <= 0 {
+		return
+	}
+	c.markActive(time.Now())
+	go func() {
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-c.closed:
+				return
+			case <-ticker.C:
+				lastActive := c.lastActiveTime()
+				if !lastActive.IsZero() && time.Since(lastActive) > timeout {
+					c.recordCloseReason("heartbeat_timeout")
+					c.observeClose("heartbeat", "heartbeat_timeout")
+					c.cleanupDisconnected()
+					return
+				}
+				if err := c.writeControl(websocket.PingMessage, nil, time.Now().Add(2*time.Second)); err != nil {
+					c.recordCloseReason("heartbeat_ping_failed")
+					c.observeClose("heartbeat", classifyWSError(err))
+					c.cleanupDisconnected()
+					return
+				}
+			}
+		}
+	}()
+}
+
+func (c *Client) writeControl(messageType int, data []byte, deadline time.Time) error {
+	c.writeMutex.Lock()
+	defer c.writeMutex.Unlock()
+	return c.Conn.WriteControl(messageType, data, deadline)
+}
+
+func (c *Client) writeText(message []byte) error {
+	c.writeMutex.Lock()
+	defer c.writeMutex.Unlock()
+	return c.Conn.WriteMessage(websocket.TextMessage, message)
 }
 
 func (c *Client) wsFields(fields ...zap.Field) []zap.Field {
@@ -197,7 +278,7 @@ func (c *Client) writeMessageBack(messageBack *MessageBack) bool {
 			"route_path": c.RoutePath,
 		})
 	}
-	err := c.Conn.WriteMessage(websocket.TextMessage, messageBack.Message)
+	err := c.writeText(messageBack.Message)
 	writeResult := "success"
 	if err != nil {
 		writeResult = "failure"
@@ -246,6 +327,10 @@ func (c *Client) forwardPendingMessages() {
 // 读取websocket消息并发送给send通道
 func (c *Client) Read() {
 	defer c.cleanupDisconnected()
+	c.Conn.SetPongHandler(func(string) error {
+		c.markActive(time.Now())
+		return nil
+	})
 	if pressure.ShouldLogHotPath(c.Benchmark) {
 		zlog.Info("ws.read.start", c.wsFields(zap.String("event", "ws.read.start"))...)
 	}
@@ -285,12 +370,30 @@ func (c *Client) Read() {
 		message.MessageId = ensureMessageID(message.MessageId)
 		pressure.EnsureBenchmarkMessageMeta(message.MessageId, message.Content)
 		pressure.ObserveBenchmarkEvent(message.MessageId, "ws_read_done", map[string]interface{}{
-			"route_path": c.RoutePath,
+			"route_path":    c.RoutePath,
 			"connection_id": c.ConnectionID,
-			"session_id": message.SessionId,
-			"send_id": message.SendId,
-			"receive_id": message.ReceiveId,
+			"session_id":    message.SessionId,
+			"send_id":       message.SendId,
+			"receive_id":    message.ReceiveId,
 		})
+		idemSession, existingRecord, err := beginIngressIdempotency(message.SendId, message.MessageId)
+		if err != nil {
+			zlog.Error("ws.message.idempotency_failed", c.wsFields(
+				zap.String("event", "ws.message.idempotency_failed"),
+				zap.String("message_id", message.MessageId),
+				zap.String("error", err.Error()),
+			)...)
+			c.notifyClientCritical("消息发送失败，请稍后重试")
+			continue
+		}
+		if !idemSession.Acquired {
+			if shouldShortCircuitIngressDuplicate(c, message.MessageId, existingRecord) {
+				continue
+			}
+			c.notifyClientCritical("消息发送失败，请稍后重试")
+			continue
+		}
+		c.markActive(time.Now())
 		jsonMessage, err = json.Marshal(message)
 		if err != nil {
 			zlog.Error("ws.message.marshal_failed", c.wsFields(
@@ -298,6 +401,7 @@ func (c *Client) Read() {
 				zap.String("message_id", message.MessageId),
 				zap.String("error", err.Error()),
 			)...)
+			idemSession.clearPending()
 			c.notifyClientCritical("消息发送失败，请稍后重试")
 			continue
 		}
@@ -317,6 +421,7 @@ func (c *Client) Read() {
 			// 本地有积压时，后续消息继续排队，避免新消息绕过旧消息插队发送。
 			if len(c.SendTo) > 0 {
 				if !c.enqueueLocal(jsonMessage) {
+					idemSession.clearPending()
 					c.notifyClientCritical("由于目前同一时间过多用户发送消息，消息发送失败，请稍后重试")
 				}
 				continue
@@ -325,6 +430,7 @@ func (c *Client) Read() {
 			// 全局通道有空间就直接投递；否则退回当前连接的本地缓冲。
 			if !ChatServer.SendMessageToTransmit(jsonMessage) {
 				if !c.enqueueLocal(jsonMessage) {
+					idemSession.clearPending()
 					c.notifyClientCritical("由于目前同一时间过多用户发送消息，消息发送失败，请稍后重试")
 				}
 			}
@@ -343,6 +449,7 @@ func (c *Client) Read() {
 				zap.String("key", key),
 				zap.String("error", err.Error()),
 			)...)
+			idemSession.clearPending()
 			c.notifyClientCritical("消息发送失败，请稍后重试")
 			continue
 		}
@@ -450,8 +557,10 @@ func NewClientInit(c *gin.Context, clientId string) {
 		SendTo:       make(chan []byte, constants.CHANNEL_SIZE),
 		SendBack:     make(chan *MessageBack, constants.CHANNEL_SIZE),
 		CriticalBack: make(chan *MessageBack, 1),
+		connectedAt:  time.Now(),
 		closed:       make(chan struct{}),
 	}
+	client.markActive(client.connectedAt)
 	observability.IncWSOnline(routePath)
 	if pressure.ShouldLogHotPath(client.Benchmark) {
 		zlog.Info("ws.connection.open", client.wsFields(zap.String("event", "ws.connection.open"))...)
@@ -471,6 +580,7 @@ func NewClientInit(c *gin.Context, clientId string) {
 	}
 	go client.Read()
 	go client.Write()
+	client.startHeartbeat()
 	if pressure.ShouldLogHotPath(client.Benchmark) {
 		zlog.Info("ws.connection.ready", client.wsFields(zap.String("event", "ws.connection.ready"))...)
 	}
@@ -501,7 +611,11 @@ func ClientLogout(clientId string) (string, int) {
 func (c *Client) Close() {
 	c.closeOnce.Do(func() {
 		c.isClosed.Store(true)
-		c.observeClose("local", "local_close")
+		reason := "local_close"
+		if ptr := c.closeReason.Load(); ptr != nil && *ptr != "" {
+			reason = *ptr
+		}
+		c.observeClose("local", reason)
 		close(c.closed)
 		observability.DecWSOnline(c.RoutePath)
 		if err := c.Conn.Close(); err != nil {
