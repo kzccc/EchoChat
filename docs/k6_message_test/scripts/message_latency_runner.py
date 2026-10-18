@@ -397,14 +397,22 @@ def parse_ws_message(raw: Any) -> dict | None:
     return data
 
 
-async def ws_connect(ws_base_url: str, ws_path: str, access_token: str, *, open_timeout_sec: float = 10.0):
+async def ws_connect(
+    ws_base_url: str,
+    ws_path: str,
+    access_token: str,
+    *,
+    open_timeout_sec: float = 10.0,
+    ping_interval_sec: float | None = 20.0,
+    ping_timeout_sec: float | None = 20.0,
+):
     url = f"{ws_base_url}{ws_path}?token={quote(access_token)}"
     return await websockets.connect(
         url,
         open_timeout=open_timeout_sec,
         close_timeout=3,
-        ping_interval=20,
-        ping_timeout=20,
+        ping_interval=ping_interval_sec,
+        ping_timeout=ping_timeout_sec,
     )
 
 
@@ -554,6 +562,8 @@ async def run_single_scenario(args, fixture: dict, run_id: str) -> tuple[dict, l
                     args.ws_path,
                     receiver["access_token"],
                     open_timeout_sec=ws_open_timeout_sec,
+                    ping_interval_sec=args.ws_ping_interval_sec,
+                    ping_timeout_sec=args.ws_ping_timeout_sec,
                 )
                 try:
                     sender_ws = await ws_connect(
@@ -561,6 +571,8 @@ async def run_single_scenario(args, fixture: dict, run_id: str) -> tuple[dict, l
                         args.ws_path,
                         sender["access_token"],
                         open_timeout_sec=ws_open_timeout_sec,
+                        ping_interval_sec=args.ws_ping_interval_sec,
+                        ping_timeout_sec=args.ws_ping_timeout_sec,
                     )
                 except Exception:
                     await receiver_ws.close()
@@ -857,6 +869,8 @@ async def run_group_scenario(args, fixture: dict, run_id: str) -> tuple[dict, li
                     args.ws_path,
                     receiver["access_token"],
                     open_timeout_sec=ws_open_timeout_sec,
+                    ping_interval_sec=args.ws_ping_interval_sec,
+                    ping_timeout_sec=args.ws_ping_timeout_sec,
                 )
                 receiver_connections.append(conn)
             sender_connection = await ws_connect(
@@ -864,6 +878,8 @@ async def run_group_scenario(args, fixture: dict, run_id: str) -> tuple[dict, li
                 args.ws_path,
                 sender["access_token"],
                 open_timeout_sec=ws_open_timeout_sec,
+                ping_interval_sec=args.ws_ping_interval_sec,
+                ping_timeout_sec=args.ws_ping_timeout_sec,
             )
             await asyncio.sleep(args.connection_settle_ms / 1000.0)
 
@@ -1003,6 +1019,8 @@ def main() -> None:
     parser.add_argument("--setup-workers", type=int, default=16)
     parser.add_argument("--setup-http-timeout-ms", type=int, default=90000)
     parser.add_argument("--ws-open-timeout-ms", type=int, default=30000)
+    parser.add_argument("--ws-ping-interval-sec", type=float, default=20.0)
+    parser.add_argument("--ws-ping-timeout-sec", type=float, default=20.0)
     parser.add_argument("--drain-wait-ms", type=int, default=5000)
     parser.add_argument("--drain-idle-ms", type=int, default=1000)
     parser.add_argument("--pair-count", type=int, default=30)
@@ -1015,6 +1033,10 @@ def main() -> None:
     args.ws_base_url = args.ws_base_url.rstrip("/")
     args.base_urls = parse_url_list(args.base_urls) or [args.base_url]
     args.ws_base_urls = parse_url_list(args.ws_base_urls) or [args.ws_base_url]
+    if args.ws_ping_interval_sec <= 0:
+        args.ws_ping_interval_sec = None
+    if args.ws_ping_timeout_sec <= 0:
+        args.ws_ping_timeout_sec = None
 
     fixture = json.loads(Path(args.fixture).read_text(encoding="utf-8"))
     run_id = f"{args.mode_label}-{args.scenario}-{int(time.time())}"

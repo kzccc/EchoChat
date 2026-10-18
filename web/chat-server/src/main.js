@@ -11,7 +11,7 @@ import { ElMessage } from 'element-plus'
 // 引入'https://webrtc.github.io/adapter/adapter-latest.js'
 // import 'https://webrtc.github.io/adapter/adapter-latest.js'
 // import '@/assets/css/font.css'
-import '@/assets/css/chat.css'
+import '@/assets/css/theme.css'
 import { disconnectSocket, refreshAccessToken } from './utils/session'
 
 let refreshPromise = null

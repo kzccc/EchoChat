@@ -3,11 +3,6 @@ package gorm
 // 本文件实现 user info service 相关的业务服务，负责组织数据库、缓存和业务规则。
 
 import (
-	"encoding/json"
-	"errors"
-	"fmt"
-	redis "github.com/go-redis/redis/v8"
-	"gorm.io/gorm"
 	"echo_chat_server/internal/auth"
 	"echo_chat_server/internal/dao"
 	"echo_chat_server/internal/dto/request"
@@ -19,6 +14,11 @@ import (
 	"echo_chat_server/pkg/enum/user_info/user_status_enum"
 	"echo_chat_server/pkg/util/random"
 	"echo_chat_server/pkg/zlog"
+	"encoding/json"
+	"errors"
+	"fmt"
+	redis "github.com/go-redis/redis/v8"
+	"gorm.io/gorm"
 	"regexp"
 	"time"
 )
@@ -268,13 +268,13 @@ func (u *userInfoService) Register(registerReq request.RegisterRequest) (string,
 	return "注册成功", u.buildRegisterRespond(newUser, tokenPair), 0
 }
 
-//?当access失效的时候,就来到这里看refresh token,看看过期了没有,没有的话就可以刷新access token
+// ?当access失效的时候,就来到这里看refresh token,看看过期了没有,没有的话就可以刷新access token
 func (u *userInfoService) RefreshToken(refreshToken string) (string, *respond.TokenPairRespond, int, int) {
 	//这里会将refresh token的负载数据部分解析出来
 	claims, err := auth.ParseTokenAs(refreshToken, auth.RefreshTokenType)
 	if err != nil {
 		zlog.Error(err.Error())
-		return "登录已失效，请重新登录", nil, -2, 401//ParseTokenAs 负责看“这个 token 从 JWT 角度是否合法、是不是 refresh 类型”,以及有没有过期等校验
+		return "登录已失效，请重新登录", nil, -2, 401 //ParseTokenAs 负责看“这个 token 从 JWT 角度是否合法、是不是 refresh 类型”,以及有没有过期等校验
 	}
 
 	if err := auth.ValidateRefreshToken(claims.SessionID, refreshToken); err != nil {
@@ -296,16 +296,16 @@ func (u *userInfoService) RefreshToken(refreshToken string) (string, *respond.To
 		_ = auth.DeleteRefreshToken(claims.SessionID)
 		return "账号已被禁用，请联系管理员", nil, -2, 403
 	}
-	//?重新生成 token对
-	tokenPair, err := u.rotateTokenPair(user, claims.SessionID)
+	//?refresh token 保持不变，只重新签发短期 access token。
+	accessToken, err := auth.GenerateAccessToken(user, claims.SessionID)
 	if err != nil {
 		zlog.Error(err.Error())
 		return constants.SYSTEM_ERROR, nil, -1, 500
 	}
-	
+
 	return "刷新令牌成功", &respond.TokenPairRespond{
-		AccessToken:  tokenPair.AccessToken,
-		RefreshToken: tokenPair.RefreshToken,
+		AccessToken:  accessToken,
+		RefreshToken: refreshToken,
 	}, 0, 200
 }
 
@@ -337,9 +337,13 @@ func (u *userInfoService) UpdateUserInfo(updateReq request.UpdateUserInfoRequest
 		zlog.Error(res.Error.Error())
 		return constants.SYSTEM_ERROR, -1
 	}
-	//if err := myredis.DelKeysWithPattern("user_info_" + updateReq.Uuid); err != nil {
-	//	zlog.Error(err.Error())
-	//}
+	invalidateUserProfileCaches(updateReq.Uuid)
+	if err := myredis.DelKeysWithPrefix("contact_user_list"); err != nil {
+		zlog.Error(err.Error())
+	}
+	if err := myredis.DelKeysWithPrefix("session_list"); err != nil {
+		zlog.Error(err.Error())
+	}
 	return "修改用户信息成功", 0
 }
 
@@ -387,10 +391,13 @@ func (u *userInfoService) AbleUsers(uuidList []string) (string, int) {
 			return constants.SYSTEM_ERROR, -1
 		}
 	}
-	// 删除所有"contact_user_list"开头的key
-	//if err := myredis.DelKeysWithPrefix("contact_user_list"); err != nil {
-	//	zlog.Error(err.Error())
-	//}
+	invalidateUserProfileCaches(uuidList...)
+	if err := myredis.DelKeysWithPrefix("contact_user_list"); err != nil {
+		zlog.Error(err.Error())
+	}
+	if err := myredis.DelKeysWithPrefix("session_list"); err != nil {
+		zlog.Error(err.Error())
+	}
 	return "启用用户成功", 0
 }
 
@@ -424,10 +431,16 @@ func (u *userInfoService) DisableUsers(uuidList []string) (string, int) {
 			}
 		}
 	}
-	// 删除所有"contact_user_list"开头的key
-	//if err := myredis.DelKeysWithPrefix("contact_user_list"); err != nil {
-	//	zlog.Error(err.Error())
-	//}
+	invalidateUserProfileCaches(uuidList...)
+	if err := myredis.DelKeysWithPrefix("contact_user_list"); err != nil {
+		zlog.Error(err.Error())
+	}
+	if err := myredis.DelKeysWithPrefix("session_list"); err != nil {
+		zlog.Error(err.Error())
+	}
+	if err := myredis.DelKeysWithPrefix("group_session_list"); err != nil {
+		zlog.Error(err.Error())
+	}
 	return "禁用用户成功", 0
 }
 
@@ -511,10 +524,19 @@ func (u *userInfoService) DeleteUsers(uuidList []string) (string, int) {
 		}
 
 	}
-	// 删除所有"contact_user_list"开头的key
-	//if err := myredis.DelKeysWithPrefix("contact_user_list"); err != nil {
-	//	zlog.Error(err.Error())
-	//}
+	invalidateUserProfileCaches(uuidList...)
+	if err := myredis.DelKeysWithPrefix("contact_user_list"); err != nil {
+		zlog.Error(err.Error())
+	}
+	if err := myredis.DelKeysWithPrefix("session_list"); err != nil {
+		zlog.Error(err.Error())
+	}
+	if err := myredis.DelKeysWithPrefix("group_session_list"); err != nil {
+		zlog.Error(err.Error())
+	}
+	if err := myredis.DelKeysWithPrefix("my_joined_group_list"); err != nil {
+		zlog.Error(err.Error())
+	}
 	return "删除用户成功", 0
 }
 

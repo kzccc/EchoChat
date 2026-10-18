@@ -3,6 +3,7 @@
 /echo_chat_seed
 /cmd/echo_chat_server/echo_chat_backend
 /bin/
+/build/
 /web/chat-server/dist/
 
 # Go / test artifacts

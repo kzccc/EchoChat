@@ -22,9 +22,10 @@ const (
 )
 
 type kafkaWSDispatchEnvelope struct {
-	ClientID string `json:"client_id"`
-	Message  string `json:"message"`
-	UUID     string `json:"uuid"`
+	ClientID        string `json:"client_id"`
+	Message         string `json:"message"`
+	UUID            string `json:"uuid"`
+	ConversationKey string `json:"conversation_key"`
 }
 
 type kafkaWSRouteRecord struct {
@@ -257,8 +258,9 @@ func (k *KafkaServer) startRemoteDispatchSubscriber() {
 			}
 			enqueueStart := time.Now()
 			client.enqueueBack(&MessageBack{
-				Message: []byte(envelope.Message),
-				Uuid:    envelope.UUID,
+				Message:         []byte(envelope.Message),
+				Uuid:            envelope.UUID,
+				ConversationKey: envelope.ConversationKey,
 			})
 			observability.ObserveKafkaWSDispatchEvent(k.instanceID, "remote_receive_local_enqueue")
 			observability.ObserveKafkaWSDispatchDuration(k.instanceID, "remote_receive_local_enqueue", time.Since(enqueueStart))
@@ -266,7 +268,7 @@ func (k *KafkaServer) startRemoteDispatchSubscriber() {
 	}
 }
 
-func (k *KafkaServer) dispatchToKafkaRecipients(recipientIDs []string, message []byte, messageUUID string) {
+func (k *KafkaServer) dispatchToKafkaRecipients(recipientIDs []string, message []byte, messageUUID string, conversationKey string) {
 	targets := uniqueClientIDs(recipientIDs...)
 	updateAssigned := false
 
@@ -290,8 +292,9 @@ func (k *KafkaServer) dispatchToKafkaRecipients(recipientIDs []string, message [
 				})
 			}
 			client.enqueueBack(&MessageBack{
-				Message: message,
-				Uuid:    dispatchUUID,
+				Message:         message,
+				Uuid:            dispatchUUID,
+				ConversationKey: conversationKey,
 			})
 			observability.ObserveKafkaWSDispatchEvent(k.instanceID, "local_direct_enqueue")
 			observability.ObserveKafkaWSDispatchDuration(k.instanceID, "local_direct_enqueue", time.Since(enqueueStart))
@@ -312,9 +315,10 @@ func (k *KafkaServer) dispatchToKafkaRecipients(recipientIDs []string, message [
 			continue
 		}
 		envelope := kafkaWSDispatchEnvelope{
-			ClientID: recipientID,
-			Message:  string(message),
-			UUID:     dispatchUUID,
+			ClientID:        recipientID,
+			Message:         string(message),
+			UUID:            dispatchUUID,
+			ConversationKey: conversationKey,
 		}
 		payload, err := json.Marshal(envelope)
 		if err != nil {
@@ -333,8 +337,8 @@ func (k *KafkaServer) dispatchToKafkaRecipients(recipientIDs []string, message [
 		publishStart := time.Now()
 		if dispatchUUID != "" {
 			pressure.ObserveBenchmarkEventAt(dispatchUUID, "dispatch_after_persist_start", publishStart, map[string]interface{}{
-				"dispatch_mode": "remote_publish",
-				"client_id":     recipientID,
+				"dispatch_mode":      "remote_publish",
+				"client_id":          recipientID,
 				"remote_instance_id": remoteInstanceID,
 			})
 		}

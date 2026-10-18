@@ -8,6 +8,7 @@ import (
 )
 
 const benchmarkMessagePrefix = "BENCH:"
+const benchmarkSystemBenchID = "__system__"
 
 type BenchmarkMessageMeta struct {
 	RunID    string `json:"run_id"`
@@ -109,6 +110,27 @@ func ObserveBenchmarkEventAt(messageID string, event string, occurredAt time.Tim
 		BenchID:      meta.BenchID,
 		RunID:        meta.RunID,
 		Scenario:     meta.Scenario,
+		Event:        event,
+		OccurredUnix: occurredAt.UnixNano(),
+		Fields:       cloneTraceFields(fields),
+	})
+	traceStore.mu.Unlock()
+}
+
+func ObserveBenchmarkSystemEvent(event string, fields map[string]interface{}) {
+	if event == "" {
+		return
+	}
+	ObserveBenchmarkSystemEventAt(event, time.Now(), fields)
+}
+
+func ObserveBenchmarkSystemEventAt(event string, occurredAt time.Time, fields map[string]interface{}) {
+	if event == "" {
+		return
+	}
+	traceStore.mu.Lock()
+	traceStore.events = append(traceStore.events, BenchmarkTraceEvent{
+		BenchID:      benchmarkSystemBenchID,
 		Event:        event,
 		OccurredUnix: occurredAt.UnixNano(),
 		Fields:       cloneTraceFields(fields),

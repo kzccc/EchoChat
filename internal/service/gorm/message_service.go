@@ -6,10 +6,13 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
+
 	"github.com/gin-gonic/gin"
 	"github.com/go-redis/redis/v8"
 	"go.uber.org/zap"
 	"io"
+
 	"echo_chat_server/internal/config"
 	"echo_chat_server/internal/dao"
 	"echo_chat_server/internal/dto/respond"
@@ -27,9 +30,15 @@ type messageService struct {
 // MessageService 提供消息列表查询和文件上传能力。
 var MessageService = new(messageService)
 
+const (
+	defaultMessagePageLimit = 30
+	maxMessagePageLimit     = 100
+)
+
 // GetMessageList 获取聊天记录
-func (m *messageService) GetMessageList(userOneId, userTwoId string) (string, []respond.GetMessageListRespond, int) {
+func (m *messageService) GetMessageList(userOneId, userTwoId string, beforeSeq int64, limit int) (string, respond.GetMessageListPageRespond, int) {
 	conversationKey := model.BuildConversationKey(userOneId, userTwoId)
+	limit = normalizeMessagePageLimit(limit)
 	zlog.Info(
 		"message.query.start",
 		zap.String("event", "message.query.start"),
@@ -37,172 +46,285 @@ func (m *messageService) GetMessageList(userOneId, userTwoId string) (string, []
 		zap.String("scope", "user"),
 		zap.String("user_one_id", userOneId),
 		zap.String("user_two_id", userTwoId),
-		zap.String("order_by", "session_seq ASC"),
+		zap.Int64("before_seq", beforeSeq),
+		zap.Int("limit", limit),
+		zap.String("order_by", "session_seq DESC"),
 	)
-	rspString, err := myredis.GetKeyNilIsErr("message_list_" + userOneId + "_" + userTwoId)
-	if err != nil {
-		if errors.Is(err, redis.Nil) {
-			zlog.Info(
-				"message.query.cache_miss",
-				zap.String("event", "message.query.cache_miss"),
-				zap.String("module", "message.service"),
-				zap.String("scope", "user"),
-				zap.String("user_one_id", userOneId),
-				zap.String("user_two_id", userTwoId),
-			)
-			// 单聊消息需要同时查双方互发的记录，并按时间正序返回给前端。
-			var messageList []model.Message
-			if res := dao.GormDB.Where("conversation_key = ?", conversationKey).Order("session_seq ASC").Find(&messageList); res.Error != nil {
-				zlog.Error(res.Error.Error())
-				return constants.SYSTEM_ERROR, nil, -1
-			}
-			var rspList []respond.GetMessageListRespond
-			for _, message := range messageList {
-				rspList = append(rspList, respond.GetMessageListRespond{
-					MessageId:  message.Uuid,
-					SendId:     message.SendId,
-					SendName:   message.SendName,
-					SendAvatar: message.SendAvatar,
-					ReceiveId:  message.ReceiveId,
-					Content:    message.Content,
-					Url:        message.Url,
-					Type:       message.Type,
-					FileType:   message.FileType,
-					FileName:   message.FileName,
-					FileSize:   message.FileSize,
-					SessionSeq: message.SessionSeq,
-					CreatedAt:  message.CreatedAt.Format("2006-01-02 15:04:05"),
-				})
-			}
-			// 这里原本有回写 Redis 的逻辑，目前注释掉，说明消息列表主要依赖实时推送增量维护。
-			//rspString, err := json.Marshal(rspList)
-			//if err != nil {
-			//	zlog.Error(err.Error())
-			//}
-			//if err := myredis.SetKeyEx("message_list_"+userOneId+"_"+userTwoId, string(rspString), time.Minute*constants.REDIS_TIMEOUT); err != nil {
-			//	zlog.Error(err.Error())
-			//}
-			zlog.Info(
-				"message.query.finish",
-				zap.String("event", "message.query.finish"),
-				zap.String("module", "message.service"),
-				zap.String("scope", "user"),
-				zap.String("source", "db"),
-				zap.String("user_one_id", userOneId),
-				zap.String("user_two_id", userTwoId),
-				zap.Int("result_count", len(rspList)),
-				zap.String("order_by", "session_seq ASC"),
-			)
-			return "获取聊天记录成功", rspList, 0
-		} else {
+
+	if beforeSeq <= 0 {
+		if page, ok, err := m.getUserMessageListFromCache(userOneId, userTwoId, limit); err != nil {
 			zlog.Error(err.Error())
-			return constants.SYSTEM_ERROR, nil, -1
+			return constants.SYSTEM_ERROR, respond.GetMessageListPageRespond{}, -1
+		} else if ok {
+			m.logUserMessageQueryFinish("cache", userOneId, userTwoId, beforeSeq, limit, page)
+			return "获取聊天记录成功", page, 0
 		}
 	}
-	var rsp []respond.GetMessageListRespond
-	// 缓存命中时直接反序列化返回，减少聊天页频繁刷新带来的数据库压力。
-	if err := json.Unmarshal([]byte(rspString), &rsp); err != nil {
+
+	page, err := m.queryUserMessagePage(conversationKey, beforeSeq, limit)
+	if err != nil {
 		zlog.Error(err.Error())
+		return constants.SYSTEM_ERROR, respond.GetMessageListPageRespond{}, -1
 	}
-	zlog.Info(
-		"message.query.finish",
-		zap.String("event", "message.query.finish"),
-		zap.String("module", "message.service"),
-		zap.String("scope", "user"),
-		zap.String("source", "cache"),
-		zap.String("user_one_id", userOneId),
-		zap.String("user_two_id", userTwoId),
-		zap.Int("result_count", len(rsp)),
-		zap.String("order_by", "session_seq ASC"),
-	)
-	return "获取群聊记录成功", rsp, 0
+	m.logUserMessageQueryFinish("db", userOneId, userTwoId, beforeSeq, limit, page)
+	return "获取聊天记录成功", page, 0
 }
 
 // GetGroupMessageList 获取群聊消息记录
-func (m *messageService) GetGroupMessageList(groupId string) (string, []respond.GetGroupMessageListRespond, int) {
+func (m *messageService) GetGroupMessageList(groupId string, beforeSeq int64, limit int) (string, respond.GetGroupMessageListPageRespond, int) {
 	conversationKey := model.BuildConversationKey("", groupId)
+	limit = normalizeMessagePageLimit(limit)
 	zlog.Info(
 		"message.query.start",
 		zap.String("event", "message.query.start"),
 		zap.String("module", "message.service"),
 		zap.String("scope", "group"),
 		zap.String("group_id", groupId),
-		zap.String("order_by", "session_seq ASC"),
+		zap.Int64("before_seq", beforeSeq),
+		zap.Int("limit", limit),
+		zap.String("order_by", "session_seq DESC"),
 	)
-	rspString, err := myredis.GetKeyNilIsErr("group_messagelist_" + groupId)
-	if err != nil {
-		if errors.Is(err, redis.Nil) {
-			zlog.Info(
-				"message.query.cache_miss",
-				zap.String("event", "message.query.cache_miss"),
-				zap.String("module", "message.service"),
-				zap.String("scope", "group"),
-				zap.String("group_id", groupId),
-			)
-			// 群消息列表只需要按 receive_id 查询该群的全部消息即可。
-			var messageList []model.Message
-			if res := dao.GormDB.Where("conversation_key = ?", conversationKey).Order("session_seq ASC").Find(&messageList); res.Error != nil {
-				zlog.Error(res.Error.Error())
-				return constants.SYSTEM_ERROR, nil, -1
-			}
-			var rspList []respond.GetGroupMessageListRespond
-			for _, message := range messageList {
-				rsp := respond.GetGroupMessageListRespond{
-					MessageId:  message.Uuid,
-					SendId:     message.SendId,
-					SendName:   message.SendName,
-					SendAvatar: message.SendAvatar,
-					ReceiveId:  message.ReceiveId,
-					Content:    message.Content,
-					Url:        message.Url,
-					Type:       message.Type,
-					FileType:   message.FileType,
-					FileName:   message.FileName,
-					FileSize:   message.FileSize,
-					SessionSeq: message.SessionSeq,
-					CreatedAt:  message.CreatedAt.Format("2006-01-02 15:04:05"),
-				}
-				rspList = append(rspList, rsp)
-			}
-			//rspString, err := json.Marshal(rspList)
-			//if err != nil {
-			//	zlog.Error(err.Error())
-			//}
-			//if err := myredis.SetKeyEx("group_messagelist_"+groupId, string(rspString), time.Minute*constants.REDIS_TIMEOUT); err != nil {
-			//	zlog.Error(err.Error())
-			//}
-			zlog.Info(
-				"message.query.finish",
-				zap.String("event", "message.query.finish"),
-				zap.String("module", "message.service"),
-				zap.String("scope", "group"),
-				zap.String("source", "db"),
-				zap.String("group_id", groupId),
-				zap.Int("result_count", len(rspList)),
-				zap.String("order_by", "session_seq ASC"),
-			)
-			return "获取聊天记录成功", rspList, 0
-		} else {
+
+	if beforeSeq <= 0 {
+		if page, ok, err := m.getGroupMessageListFromCache(groupId, limit); err != nil {
 			zlog.Error(err.Error())
-			return constants.SYSTEM_ERROR, nil, -1
+			return constants.SYSTEM_ERROR, respond.GetGroupMessageListPageRespond{}, -1
+		} else if ok {
+			m.logGroupMessageQueryFinish("cache", groupId, beforeSeq, limit, page)
+			return "获取聊天记录成功", page, 0
 		}
 	}
-	var rsp []respond.GetGroupMessageListRespond
-	// 群消息缓存命中后直接返回，避免在高频刷新场景下重复扫消息表。
-	if err := json.Unmarshal([]byte(rspString), &rsp); err != nil {
+
+	page, err := m.queryGroupMessagePage(conversationKey, beforeSeq, limit)
+	if err != nil {
 		zlog.Error(err.Error())
+		return constants.SYSTEM_ERROR, respond.GetGroupMessageListPageRespond{}, -1
 	}
+	m.logGroupMessageQueryFinish("db", groupId, beforeSeq, limit, page)
+	return "获取聊天记录成功", page, 0
+}
+
+func normalizeMessagePageLimit(limit int) int {
+	if limit <= 0 {
+		return defaultMessagePageLimit
+	}
+	if limit > maxMessagePageLimit {
+		return maxMessagePageLimit
+	}
+	return limit
+}
+
+func (m *messageService) queryUserMessagePage(conversationKey string, beforeSeq int64, limit int) (respond.GetMessageListPageRespond, error) {
+	var messageList []model.Message
+	query := dao.GormDB.Where("conversation_key = ?", conversationKey)
+	if beforeSeq > 0 {
+		query = query.Where("session_seq < ?", beforeSeq)
+	}
+	if res := query.Order("session_seq DESC").Limit(limit + 1).Find(&messageList); res.Error != nil {
+		return respond.GetMessageListPageRespond{}, res.Error
+	}
+
+	hasMore := len(messageList) > limit
+	if hasMore {
+		messageList = messageList[:limit]
+	}
+	slices.Reverse(messageList)
+
+	rspList := make([]respond.GetMessageListRespond, 0, len(messageList))
+	for _, message := range messageList {
+		rspList = append(rspList, buildUserMessageListRespond(message))
+	}
+	return respond.GetMessageListPageRespond{
+		List:          rspList,
+		NextBeforeSeq: oldestUserMessageSeq(rspList),
+		HasMore:       hasMore,
+		Limit:         limit,
+	}, nil
+}
+
+func (m *messageService) queryGroupMessagePage(conversationKey string, beforeSeq int64, limit int) (respond.GetGroupMessageListPageRespond, error) {
+	var messageList []model.Message
+	query := dao.GormDB.Where("conversation_key = ?", conversationKey)
+	if beforeSeq > 0 {
+		query = query.Where("session_seq < ?", beforeSeq)
+	}
+	if res := query.Order("session_seq DESC").Limit(limit + 1).Find(&messageList); res.Error != nil {
+		return respond.GetGroupMessageListPageRespond{}, res.Error
+	}
+
+	hasMore := len(messageList) > limit
+	if hasMore {
+		messageList = messageList[:limit]
+	}
+	slices.Reverse(messageList)
+
+	rspList := make([]respond.GetGroupMessageListRespond, 0, len(messageList))
+	for _, message := range messageList {
+		rspList = append(rspList, buildGroupMessageListRespond(message))
+	}
+	return respond.GetGroupMessageListPageRespond{
+		List:          rspList,
+		NextBeforeSeq: oldestGroupMessageSeq(rspList),
+		HasMore:       hasMore,
+		Limit:         limit,
+	}, nil
+}
+
+func (m *messageService) getUserMessageListFromCache(userOneId, userTwoId string, limit int) (respond.GetMessageListPageRespond, bool, error) {
+	rspString, err := myredis.GetKeyNilIsErr("message_list_" + model.BuildConversationKey(userOneId, userTwoId))
+	if errors.Is(err, redis.Nil) {
+		return respond.GetMessageListPageRespond{}, false, nil
+	}
+	if err != nil {
+		return respond.GetMessageListPageRespond{}, false, err
+	}
+
+	var rsp []respond.GetMessageListRespond
+	if err := json.Unmarshal([]byte(rspString), &rsp); err != nil {
+		return respond.GetMessageListPageRespond{}, false, err
+	}
+	if len(rsp) < limit {
+		return respond.GetMessageListPageRespond{}, false, nil
+	}
+	slices.SortFunc(rsp, func(a, b respond.GetMessageListRespond) int {
+		if a.SessionSeq < b.SessionSeq {
+			return -1
+		}
+		if a.SessionSeq > b.SessionSeq {
+			return 1
+		}
+		return 0
+	})
+	if len(rsp) > limit {
+		rsp = rsp[len(rsp)-limit:]
+	}
+	return respond.GetMessageListPageRespond{
+		List:          rsp,
+		NextBeforeSeq: oldestUserMessageSeq(rsp),
+		HasMore:       true,
+		Limit:         limit,
+	}, true, nil
+}
+
+func (m *messageService) getGroupMessageListFromCache(groupId string, limit int) (respond.GetGroupMessageListPageRespond, bool, error) {
+	rspString, err := myredis.GetKeyNilIsErr("group_messagelist_" + groupId)
+	if errors.Is(err, redis.Nil) {
+		return respond.GetGroupMessageListPageRespond{}, false, nil
+	}
+	if err != nil {
+		return respond.GetGroupMessageListPageRespond{}, false, err
+	}
+
+	var rsp []respond.GetGroupMessageListRespond
+	if err := json.Unmarshal([]byte(rspString), &rsp); err != nil {
+		return respond.GetGroupMessageListPageRespond{}, false, err
+	}
+	if len(rsp) < limit {
+		return respond.GetGroupMessageListPageRespond{}, false, nil
+	}
+	slices.SortFunc(rsp, func(a, b respond.GetGroupMessageListRespond) int {
+		if a.SessionSeq < b.SessionSeq {
+			return -1
+		}
+		if a.SessionSeq > b.SessionSeq {
+			return 1
+		}
+		return 0
+	})
+	if len(rsp) > limit {
+		rsp = rsp[len(rsp)-limit:]
+	}
+	return respond.GetGroupMessageListPageRespond{
+		List:          rsp,
+		NextBeforeSeq: oldestGroupMessageSeq(rsp),
+		HasMore:       true,
+		Limit:         limit,
+	}, true, nil
+}
+
+func buildUserMessageListRespond(message model.Message) respond.GetMessageListRespond {
+	return respond.GetMessageListRespond{
+		MessageId:  message.Uuid,
+		SendId:     message.SendId,
+		SendName:   message.SendName,
+		SendAvatar: message.SendAvatar,
+		ReceiveId:  message.ReceiveId,
+		Content:    message.Content,
+		Url:        message.Url,
+		Type:       message.Type,
+		FileType:   message.FileType,
+		FileName:   message.FileName,
+		FileSize:   message.FileSize,
+		SessionSeq: message.SessionSeq,
+		CreatedAt:  message.CreatedAt.Format("2006-01-02 15:04:05"),
+	}
+}
+
+func buildGroupMessageListRespond(message model.Message) respond.GetGroupMessageListRespond {
+	return respond.GetGroupMessageListRespond{
+		MessageId:  message.Uuid,
+		SendId:     message.SendId,
+		SendName:   message.SendName,
+		SendAvatar: message.SendAvatar,
+		ReceiveId:  message.ReceiveId,
+		Content:    message.Content,
+		Url:        message.Url,
+		Type:       message.Type,
+		FileType:   message.FileType,
+		FileName:   message.FileName,
+		FileSize:   message.FileSize,
+		SessionSeq: message.SessionSeq,
+		CreatedAt:  message.CreatedAt.Format("2006-01-02 15:04:05"),
+	}
+}
+
+func oldestUserMessageSeq(list []respond.GetMessageListRespond) int64 {
+	if len(list) == 0 {
+		return 0
+	}
+	return list[0].SessionSeq
+}
+
+func oldestGroupMessageSeq(list []respond.GetGroupMessageListRespond) int64 {
+	if len(list) == 0 {
+		return 0
+	}
+	return list[0].SessionSeq
+}
+
+func (m *messageService) logUserMessageQueryFinish(source, userOneId, userTwoId string, beforeSeq int64, limit int, page respond.GetMessageListPageRespond) {
+	zlog.Info(
+		"message.query.finish",
+		zap.String("event", "message.query.finish"),
+		zap.String("module", "message.service"),
+		zap.String("scope", "user"),
+		zap.String("source", source),
+		zap.String("user_one_id", userOneId),
+		zap.String("user_two_id", userTwoId),
+		zap.Int64("before_seq", beforeSeq),
+		zap.Int64("next_before_seq", page.NextBeforeSeq),
+		zap.Bool("has_more", page.HasMore),
+		zap.Int("limit", limit),
+		zap.Int("result_count", len(page.List)),
+		zap.String("order_by", "session_seq ASC"),
+	)
+}
+
+func (m *messageService) logGroupMessageQueryFinish(source, groupId string, beforeSeq int64, limit int, page respond.GetGroupMessageListPageRespond) {
 	zlog.Info(
 		"message.query.finish",
 		zap.String("event", "message.query.finish"),
 		zap.String("module", "message.service"),
 		zap.String("scope", "group"),
-		zap.String("source", "cache"),
+		zap.String("source", source),
 		zap.String("group_id", groupId),
-		zap.Int("result_count", len(rsp)),
+		zap.Int64("before_seq", beforeSeq),
+		zap.Int64("next_before_seq", page.NextBeforeSeq),
+		zap.Bool("has_more", page.HasMore),
+		zap.Int("limit", limit),
+		zap.Int("result_count", len(page.List)),
 		zap.String("order_by", "session_seq ASC"),
 	)
-	return "获取聊天记录成功", rsp, 0
 }
 
 // UploadAvatar 上传头像

@@ -16,7 +16,6 @@ import (
 	"echo_chat_server/internal/observability"
 	"echo_chat_server/internal/pressure"
 	myredis "echo_chat_server/internal/service/redis"
-	"echo_chat_server/pkg/constants"
 	"echo_chat_server/pkg/enum/message/message_status_enum"
 	"echo_chat_server/pkg/enum/message/message_type_enum"
 	"echo_chat_server/pkg/zlog"
@@ -52,28 +51,100 @@ func decodeConsumedMessage(kafkaMessage *sarama.ConsumerMessage) (decodedConsume
 		"partition": kafkaMessage.Partition,
 		"offset":    kafkaMessage.Offset,
 	})
+	jsonStart := time.Now()
+	pressure.ObserveBenchmarkEventAt(messageID, "consumer_decode_json_start", jsonStart, map[string]interface{}{
+		"topic":     kafkaMessage.Topic,
+		"partition": kafkaMessage.Partition,
+		"offset":    kafkaMessage.Offset,
+		"bytes":     len(data),
+	})
 	if err := json.Unmarshal(data, &chatMessageReq); err != nil {
 		observeKafkaConsumerStage(kafkaMessage, "deserialize", decodeStart)
 		return decodedConsumedMessage{}, nonRetryableConsumerError("deserialize", err)
 	}
+	pressure.ObserveBenchmarkEvent(messageID, "consumer_decode_json_done", map[string]interface{}{
+		"topic":     kafkaMessage.Topic,
+		"partition": kafkaMessage.Partition,
+		"offset":    kafkaMessage.Offset,
+	})
 	observeKafkaConsumerStage(kafkaMessage, "deserialize", decodeStart)
-	chatMessageReq.MessageId = ensureMessageID(chatMessageReq.MessageId)
+
+	ensureIDStart := time.Now()
+	pressure.ObserveBenchmarkEventAt(messageID, "consumer_decode_ensure_id_start", ensureIDStart, map[string]interface{}{
+		"topic":     kafkaMessage.Topic,
+		"partition": kafkaMessage.Partition,
+		"offset":    kafkaMessage.Offset,
+	})
+	ensureServerMessageID(&chatMessageReq)
+	messageID = chatMessageReq.MessageId
+	pressure.ObserveBenchmarkEvent(messageID, "consumer_decode_ensure_id_done", map[string]interface{}{
+		"topic":         kafkaMessage.Topic,
+		"partition":     kafkaMessage.Partition,
+		"offset":        kafkaMessage.Offset,
+		"client_msg_id": chatMessageReq.ClientMsgID,
+	})
+
+	validateStart := time.Now()
+	pressure.ObserveBenchmarkEventAt(messageID, "consumer_decode_validate_start", validateStart, map[string]interface{}{
+		"topic":     kafkaMessage.Topic,
+		"partition": kafkaMessage.Partition,
+		"offset":    kafkaMessage.Offset,
+	})
 	if chatMessageReq.SendId == "" || chatMessageReq.ReceiveId == "" {
 		return decodedConsumedMessage{}, nonRetryableConsumerError("route", errors.New("send_id or receive_id is empty"))
 	}
+	pressure.ObserveBenchmarkEvent(messageID, "consumer_decode_validate_done", map[string]interface{}{
+		"topic":     kafkaMessage.Topic,
+		"partition": kafkaMessage.Partition,
+		"offset":    kafkaMessage.Offset,
+	})
+
+	registerStart := time.Now()
+	pressure.ObserveBenchmarkEventAt(messageID, "consumer_decode_register_benchmark_start", registerStart, map[string]interface{}{
+		"topic":     kafkaMessage.Topic,
+		"partition": kafkaMessage.Partition,
+		"offset":    kafkaMessage.Offset,
+	})
 	pressure.RegisterBenchmarkMessage(chatMessageReq.MessageId, chatMessageReq.Content)
+	pressure.ObserveBenchmarkEvent(messageID, "consumer_decode_register_benchmark_done", map[string]interface{}{
+		"topic":     kafkaMessage.Topic,
+		"partition": kafkaMessage.Partition,
+		"offset":    kafkaMessage.Offset,
+	})
+
+	conversationKeyStart := time.Now()
+	pressure.ObserveBenchmarkEventAt(messageID, "consumer_decode_conversation_key_start", conversationKeyStart, map[string]interface{}{
+		"topic":     kafkaMessage.Topic,
+		"partition": kafkaMessage.Partition,
+		"offset":    kafkaMessage.Offset,
+	})
+	conversationKey := model.BuildConversationKey(chatMessageReq.SendId, chatMessageReq.ReceiveId)
+	pressure.ObserveBenchmarkEvent(messageID, "consumer_decode_conversation_key_done", map[string]interface{}{
+		"topic":            kafkaMessage.Topic,
+		"partition":        kafkaMessage.Partition,
+		"offset":           kafkaMessage.Offset,
+		"conversation_key": conversationKey,
+	})
+
+	buildStart := time.Now()
+	pressure.ObserveBenchmarkEventAt(messageID, "consumer_decode_build_result_start", buildStart, map[string]interface{}{
+		"topic":     kafkaMessage.Topic,
+		"partition": kafkaMessage.Partition,
+		"offset":    kafkaMessage.Offset,
+	})
+	normalizedAvatar := normalizePath(chatMessageReq.SendAvatar)
 	pressure.ObserveBenchmarkEvent(chatMessageReq.MessageId, "consumer_decode_done", map[string]interface{}{
 		"topic":            kafkaMessage.Topic,
 		"partition":        kafkaMessage.Partition,
 		"offset":           kafkaMessage.Offset,
-		"conversation_key": model.BuildConversationKey(chatMessageReq.SendId, chatMessageReq.ReceiveId),
+		"conversation_key": conversationKey,
 	})
 	return decodedConsumedMessage{
 		kafkaMessage:     kafkaMessage,
 		request:          chatMessageReq,
 		messageID:        chatMessageReq.MessageId,
-		conversationKey:  model.BuildConversationKey(chatMessageReq.SendId, chatMessageReq.ReceiveId),
-		normalizedAvatar: normalizePath(chatMessageReq.SendAvatar),
+		conversationKey:  conversationKey,
+		normalizedAvatar: normalizedAvatar,
 	}, nil
 }
 
@@ -150,21 +221,48 @@ func handleDecodedConsumedMessage(k *KafkaServer, decoded decodedConsumedMessage
 	}
 
 	messageBackUUID := ""
+	useAsyncPersist := config.GetConfig().KafkaConfig.UseAsyncPersist()
 	useGroupAsyncPipeline := len(message.ReceiveId) > 0 &&
 		message.ReceiveId[0] == 'G' &&
-		config.GetConfig().KafkaConfig.UseGroupAsyncPipelineExperimental()
+		config.GetConfig().KafkaConfig.UseGroupAsyncPipelineExperimental() &&
+		!useAsyncPersist
+	if shouldPersist && useAsyncPersist && !useGroupAsyncPipeline {
+		messageListCacheStart := time.Now()
+		if err := writeConsumedMessageListHotCache(message, chatMessageReq.SendAvatar); err != nil {
+			observeKafkaConsumerStage(kafkaMessage, "message_list_hot_cache", messageListCacheStart)
+			return retryableConsumerError("message_list_hot_cache", err)
+		}
+		observeKafkaConsumerStage(kafkaMessage, "message_list_hot_cache", messageListCacheStart)
+	}
 	if shouldPersist && !useGroupAsyncPipeline {
-		mysqlStart := time.Now()
-		alreadyProcessed, persisted, err := saveKafkaMessage(&message)
-		observeKafkaConsumerStage(kafkaMessage, "mysql_persist", mysqlStart)
-		if err != nil {
-			return retryableConsumerError("mysql_persist", err)
-		}
-		if alreadyProcessed {
-			return nil
-		}
-		if persisted {
+		if useAsyncPersist {
+			hotCacheStart := time.Now()
+			if _, err := writeMessageHotCache(&message); err != nil {
+				observeKafkaConsumerStage(kafkaMessage, "message_hot_cache", hotCacheStart)
+				return retryableConsumerError("message_hot_cache", err)
+			}
+			observeKafkaConsumerStage(kafkaMessage, "message_hot_cache", hotCacheStart)
+
+			persistProduceStart := time.Now()
+			if err := publishPersistInsert(&message); err != nil {
+				observeKafkaConsumerStage(kafkaMessage, "persist_topic_produce", persistProduceStart)
+				return retryableConsumerError("persist_topic_produce", err)
+			}
+			observeKafkaConsumerStage(kafkaMessage, "persist_topic_produce", persistProduceStart)
 			messageBackUUID = message.Uuid
+		} else {
+			mysqlStart := time.Now()
+			alreadyProcessed, persisted, err := saveKafkaMessage(&message)
+			observeKafkaConsumerStage(kafkaMessage, "mysql_persist", mysqlStart)
+			if err != nil {
+				return retryableConsumerError("mysql_persist", err)
+			}
+			if alreadyProcessed {
+				return nil
+			}
+			if persisted {
+				messageBackUUID = message.Uuid
+			}
 		}
 	}
 
@@ -201,11 +299,12 @@ func handleDecodedConsumedMessage(k *KafkaServer, decoded decodedConsumedMessage
 			}
 			logMessageDispatch("kafka", "user", &message, len(jsonMessage))
 			dispatchStart := time.Now()
-			k.dispatchToKafkaRecipients([]string{message.ReceiveId, message.SendId}, jsonMessage, messageBackUUID)
+			k.dispatchToKafkaRecipients([]string{message.ReceiveId, message.SendId}, jsonMessage, messageBackUUID, message.ConversationKey)
 			observeKafkaConsumerStage(kafkaMessage, "websocket_dispatch", dispatchStart)
-			completeIngressIdempotencyResult(message.SendId, message.Uuid, mustMarshalIngressReplayPayload(messageRsp))
+			completeIngressIdempotencyResult(message.SendId, chatMessageReq.ClientMsgID, mustMarshalIngressReplayPayload(messageRsp))
+			invalidateSessionListCaches(message.SendId, message.ReceiveId)
 
-			cacheKey := "message_list_" + message.SendId + "_" + message.ReceiveId
+			cacheKey := userMessageListCacheKey(message.SendId, message.ReceiveId, message.ConversationKey)
 			redisReadStart := time.Now()
 			rspString, redisErr := myredis.GetKeyNilIsErr(cacheKey)
 			observeKafkaConsumerStage(kafkaMessage, "redis_read", redisReadStart)
@@ -215,19 +314,14 @@ func handleDecodedConsumedMessage(k *KafkaServer, decoded decodedConsumedMessage
 					zlog.Error(err.Error())
 				} else {
 					rsp, _ = appendUniqueUserCacheMessage(cacheKey, rsp, messageRsp, "kafka")
-					rspByte, err := json.Marshal(rsp)
+					redisWriteStart := time.Now()
+					err = setMessageListHotCache(cacheKey, rsp)
+					observeKafkaConsumerStage(kafkaMessage, "redis_write", redisWriteStart)
 					if err != nil {
+						observability.ObserveKafkaConsumeFailure(config.GetConfig().KafkaConfig.ResolveConsumerGroup(), kafkaMessage.Topic, kafkaMessage.Partition, "redis_write")
 						zlog.Error(err.Error())
 					} else {
-						redisWriteStart := time.Now()
-						err = myredis.SetKeyEx(cacheKey, string(rspByte), time.Minute*constants.REDIS_TIMEOUT)
-						observeKafkaConsumerStage(kafkaMessage, "redis_write", redisWriteStart)
-						if err != nil {
-							observability.ObserveKafkaConsumeFailure(config.GetConfig().KafkaConfig.ResolveConsumerGroup(), kafkaMessage.Topic, kafkaMessage.Partition, "redis_write")
-							zlog.Error(err.Error())
-						} else {
-							logMessageCacheUpdate("kafka", cacheKey, len(rsp))
-						}
+						logMessageCacheUpdate("kafka", cacheKey, len(rsp))
 					}
 				}
 			} else if !errors.Is(redisErr, redis.Nil) {
@@ -260,9 +354,10 @@ func handleDecodedConsumedMessage(k *KafkaServer, decoded decodedConsumedMessage
 			}
 			logMessageDispatch("kafka", "user", &message, len(jsonMessage))
 			dispatchStart := time.Now()
-			k.dispatchToKafkaRecipients([]string{message.ReceiveId}, jsonMessage, messageBackUUID)
+			k.dispatchToKafkaRecipients([]string{message.ReceiveId}, jsonMessage, messageBackUUID, message.ConversationKey)
 			observeKafkaConsumerStage(kafkaMessage, "websocket_dispatch", dispatchStart)
-			completeIngressIdempotencyResult(message.SendId, message.Uuid, mustMarshalIngressReplayPayload(messageRsp))
+			completeIngressIdempotencyResult(message.SendId, chatMessageReq.ClientMsgID, mustMarshalIngressReplayPayload(messageRsp))
+			invalidateSessionListCaches(message.SendId, message.ReceiveId)
 		}
 	case message.ReceiveId[0] == 'G':
 		if chatMessageReq.Type == message_type_enum.AudioOrVideo {
@@ -273,14 +368,14 @@ func handleDecodedConsumedMessage(k *KafkaServer, decoded decodedConsumedMessage
 		}
 		if useGroupAsyncPipeline {
 			enqueueStart := time.Now()
-			if err := k.enqueueConsumedGroupMessage(message, chatMessageReq.SendAvatar); err != nil {
+			if err := k.enqueueConsumedGroupMessage(message, chatMessageReq.SendAvatar, chatMessageReq.ClientMsgID); err != nil {
 				observeKafkaConsumerStage(kafkaMessage, "group_async_enqueue", enqueueStart)
 				return retryableConsumerError("group_async_enqueue", err)
 			}
 			observeKafkaConsumerStage(kafkaMessage, "group_async_enqueue", enqueueStart)
 			return nil
 		}
-		if err := k.handleConsumedGroupMessage(kafkaMessage, &message, chatMessageReq.SendAvatar, messageBackUUID); err != nil {
+		if err := k.handleConsumedGroupMessage(kafkaMessage, &message, chatMessageReq.SendAvatar, messageBackUUID, chatMessageReq.ClientMsgID); err != nil {
 			stage, retryable := consumerErrorMeta(err)
 			if retryable && (stage == "group_member_query" || stage == "websocket_dispatch") {
 				if dlqErr := writeDispatchFailureToDLQ(stage, message, chatMessageReq.SendAvatar, err); dlqErr != nil {

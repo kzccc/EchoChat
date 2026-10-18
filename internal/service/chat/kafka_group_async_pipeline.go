@@ -13,9 +13,10 @@ import (
 )
 
 type kafkaGroupAsyncJob struct {
-	message    model.Message
-	sendAvatar string
-	retryCount int
+	message     model.Message
+	sendAvatar  string
+	clientMsgID string
+	retryCount  int
 }
 
 type kafkaGroupAsyncDispatcher struct {
@@ -105,10 +106,11 @@ func (d *kafkaGroupAsyncDispatcher) runWorker(jobs <-chan kafkaGroupAsyncJob) {
 	}
 }
 
-func (k *KafkaServer) enqueueConsumedGroupMessage(message model.Message, sendAvatar string) error {
+func (k *KafkaServer) enqueueConsumedGroupMessage(message model.Message, sendAvatar string, clientMsgID string) error {
 	return kafkaGroupAsync.enqueue(kafkaGroupAsyncJob{
-		message:    message,
-		sendAvatar: sendAvatar,
+		message:     message,
+		sendAvatar:  sendAvatar,
+		clientMsgID: clientMsgID,
 	})
 }
 
@@ -125,5 +127,5 @@ func (k *KafkaServer) processAsyncGroupJob(job kafkaGroupAsyncJob) error {
 	if persisted {
 		messageBackUUID = message.Uuid
 	}
-	return k.handleConsumedGroupMessage(nil, &message, job.sendAvatar, messageBackUUID)
+	return k.handleConsumedGroupMessage(nil, &message, job.sendAvatar, messageBackUUID, job.clientMsgID)
 }

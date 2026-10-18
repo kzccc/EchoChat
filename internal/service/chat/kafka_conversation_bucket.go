@@ -3,6 +3,7 @@ package chat
 import (
 	"container/list"
 	"fmt"
+	"hash/fnv"
 	"runtime/debug"
 	"sync"
 	"time"
@@ -26,6 +27,8 @@ const (
 	conversationBucketResumeThreshold    = 12000
 	conversationBucketMaxQueueDepth      = 2048
 	conversationBucketCompleteDrainBatch = 64
+	conversationBucketIngressQueueSize   = 8192
+	conversationBucketKafkaReaderCount   = 20
 )
 
 type conversationBucketJob struct {
@@ -52,6 +55,12 @@ type conversationBucketProcessResult struct {
 	retryable bool
 }
 
+type conversationBucketSessionLaneItem struct {
+	kafkaMessage *sarama.ConsumerMessage
+	readerID     int
+	lane         int
+}
+
 type conversationBucketClaimRunner struct {
 	server     *KafkaServer
 	session    sarama.ConsumerGroupSession
@@ -67,6 +76,7 @@ type conversationBucketClaimRunner struct {
 
 	commitBatchSize int
 	commitInterval  time.Duration
+	asyncCommit     bool
 
 	wg                sync.WaitGroup
 	buckets           map[string]*conversationBucketState
@@ -85,6 +95,7 @@ type conversationBucketClaimRunner struct {
 	paused            bool
 	pendingMessage    *decodedConsumedMessage
 
+	markMu             sync.Mutex
 	nextMarkOffset     int64
 	inflight           int
 	completed          map[int64]*conversationBucketProcessResult
@@ -115,6 +126,7 @@ func newConversationBucketClaimRunner(server *KafkaServer, session sarama.Consum
 		drainTimeout:       kafkaCfg.ResolveConversationBucketDrainTimeout(),
 		commitBatchSize:    kafkaCfg.ResolveConsumerCommitBatchSize(),
 		commitInterval:     kafkaCfg.ResolveConsumerCommitInterval(),
+		asyncCommit:        kafkaCfg.ResolveConsumerAsyncCommitEnabled(),
 		buckets:            make(map[string]*conversationBucketState),
 		lruList:            list.New(),
 		maxBuckets:         conversationBucketMaxBuckets,
@@ -156,6 +168,49 @@ func (r *conversationBucketClaimRunner) run() error {
 	}()
 
 	consumerGroup := config.GetConfig().KafkaConfig.ResolveConsumerGroup()
+	controlStopCh := make(chan struct{})
+	controlDoneCh := make(chan struct{})
+	go r.runControlPlane(consumerGroup, controlStopCh, controlDoneCh)
+	err := r.runDataPlane(consumerGroup)
+	close(controlStopCh)
+	<-controlDoneCh
+	return err
+}
+
+func (r *conversationBucketClaimRunner) runControlPlane(consumerGroup string, stopCh <-chan struct{}, doneCh chan<- struct{}) {
+	defer close(doneCh)
+	var asyncCommitCh chan int
+	var asyncCommitDone chan struct{}
+	if r.asyncCommit {
+		asyncCommitCh = make(chan int, 1024)
+		asyncCommitDone = make(chan struct{})
+		go func() {
+			defer close(asyncCommitDone)
+			for commitCount := range asyncCommitCh {
+				commitStart := time.Now()
+				r.session.Commit()
+				duration := time.Since(commitStart)
+				pressure.ObserveBenchmarkSystemEventAt("consumer_loop_commit_done", commitStart, map[string]interface{}{
+					"topic":       r.claim.Topic(),
+					"partition":   r.claim.Partition(),
+					"count":       commitCount,
+					"duration_ms": float64(duration.Microseconds()) / 1000.0,
+					"async":       true,
+				})
+				observability.ObserveKafkaOffsetCommit(
+					consumerGroup,
+					r.claim.Topic(),
+					r.claim.Partition(),
+					duration,
+					commitCount,
+				)
+			}
+		}()
+		defer func() {
+			close(asyncCommitCh)
+			<-asyncCommitDone
+		}()
+	}
 	commitTimer := time.NewTimer(r.commitInterval)
 	if !commitTimer.Stop() {
 		select {
@@ -194,114 +249,374 @@ func (r *conversationBucketClaimRunner) run() error {
 		}
 		stopCommitTimer()
 		commitStart := time.Now()
+		commitCount := pendingCommitCount
+		pendingCommitCount = 0
+		if r.asyncCommit {
+			pressure.ObserveBenchmarkSystemEventAt("consumer_loop_async_commit_enqueue", commitStart, map[string]interface{}{
+				"topic":     r.claim.Topic(),
+				"partition": r.claim.Partition(),
+				"count":     commitCount,
+			})
+			asyncCommitCh <- commitCount
+			return
+		}
 		r.session.Commit()
+		pressure.ObserveBenchmarkSystemEventAt("consumer_loop_commit_done", commitStart, map[string]interface{}{
+			"topic":       r.claim.Topic(),
+			"partition":   r.claim.Partition(),
+			"count":       commitCount,
+			"duration_ms": float64(time.Since(commitStart).Microseconds()) / 1000.0,
+			"async":       false,
+		})
 		observability.ObserveKafkaOffsetCommit(
 			consumerGroup,
 			r.claim.Topic(),
 			r.claim.Partition(),
 			time.Since(commitStart),
-			pendingCommitCount,
+			commitCount,
 		)
-		pendingCommitCount = 0
 	}
 	defer flushPending()
 
 	for {
-		if r.drainCompleteBatch(&pendingCommitCount, flushPending, armCommitTimer) > 0 {
-			continue
-		}
-
-		if r.shouldPauseConsume() {
-			select {
-			case <-r.server.done:
-				r.drainInflight(&pendingCommitCount, flushPending, armCommitTimer)
-				return nil
-			case <-commitTimerC:
-				flushPending()
-			case result := <-r.completeCh:
-				r.handleComplete(result, &pendingCommitCount, flushPending, armCommitTimer)
-			case <-time.After(2 * time.Millisecond):
-			}
-			continue
-		}
-
-		if r.hasPendingMessage() {
-			if !r.tryEnqueuePending() {
-				select {
-				case <-r.server.done:
-					r.drainInflight(&pendingCommitCount, flushPending, armCommitTimer)
-					return nil
-				case <-commitTimerC:
-					flushPending()
-				case result := <-r.completeCh:
-					r.handleComplete(result, &pendingCommitCount, flushPending, armCommitTimer)
-				case <-time.After(2 * time.Millisecond):
-				}
-				continue
-			}
-			continue
-		}
-
 		select {
-		case <-r.server.done:
+		case <-stopCh:
 			r.drainInflight(&pendingCommitCount, flushPending, armCommitTimer)
-			return nil
+			return
 		case <-commitTimerC:
+			pressure.ObserveBenchmarkSystemEvent("consumer_loop_select_commit_timer", map[string]interface{}{
+				"topic":                r.claim.Topic(),
+				"partition":            r.claim.Partition(),
+				"pending_commit_count": pendingCommitCount,
+				"complete_ch_len":      len(r.completeCh),
+				"backlog":              r.currentStateBacklog(),
+				"split_control_plane":  true,
+			})
 			flushPending()
 		case result := <-r.completeCh:
 			r.handleComplete(result, &pendingCommitCount, flushPending, armCommitTimer)
-		case kafkaMessage, ok := <-r.claim.Messages():
+		}
+	}
+}
+
+func (r *conversationBucketClaimRunner) runDataPlane(consumerGroup string) error {
+	laneCount := r.workerCount
+	if laneCount < 1 {
+		laneCount = 1
+	}
+	laneChs := make([]chan conversationBucketSessionLaneItem, laneCount)
+	for i := range laneChs {
+		laneChs[i] = make(chan conversationBucketSessionLaneItem, conversationBucketIngressQueueSize)
+	}
+
+	readerCount := conversationBucketKafkaReaderCount
+	if readerCount < 1 {
+		readerCount = 1
+	}
+	readerDoneCh := make(chan error, readerCount)
+	laneDoneChs := make([]chan struct{}, laneCount)
+
+	r.ensureNextMarkOffset(r.claim.InitialOffset())
+	for i := range laneChs {
+		laneDoneChs[i] = make(chan struct{})
+		go r.runSessionLane(consumerGroup, i, laneChs[i], laneDoneChs[i])
+	}
+	for i := 0; i < readerCount; i++ {
+		go r.runKafkaReader(consumerGroup, i, laneChs, readerDoneCh)
+	}
+
+	var err error
+	for i := 0; i < readerCount; i++ {
+		if readerErr := <-readerDoneCh; readerErr != nil && err == nil {
+			err = readerErr
+		}
+	}
+	for _, laneCh := range laneChs {
+		close(laneCh)
+	}
+	for _, laneDoneCh := range laneDoneChs {
+		<-laneDoneCh
+	}
+	return err
+}
+
+func (r *conversationBucketClaimRunner) runKafkaReader(consumerGroup string, readerID int, laneChs []chan conversationBucketSessionLaneItem, doneCh chan<- error) {
+	messagesCh := r.claim.Messages()
+	for {
+		selectStart := time.Now()
+		messagesLenBeforeSelect := len(messagesCh)
+		completeLenBeforeSelect := len(r.completeCh)
+		backlogBeforeSelect := r.currentStateBacklog()
+		select {
+		case <-r.server.done:
+			doneCh <- nil
+			return
+		case kafkaMessage, ok := <-messagesCh:
 			if !ok {
-				r.drainInflight(&pendingCommitCount, flushPending, armCommitTimer)
-				return nil
+				doneCh <- nil
+				return
 			}
 			if kafkaMessage == nil {
 				continue
 			}
 			fetchAt := time.Now()
-			pressure.ObserveBenchmarkEventAt(messageIDFromKafkaHeaders(kafkaMessage), "consumer_fetch_done", fetchAt, map[string]interface{}{
-				"topic":     kafkaMessage.Topic,
-				"partition": kafkaMessage.Partition,
-				"offset":    kafkaMessage.Offset,
+			lane := sessionLaneForKafkaMessage(kafkaMessage, len(laneChs))
+			laneCh := laneChs[lane]
+			pressure.ObserveBenchmarkEventAt(messageIDFromKafkaHeaders(kafkaMessage), "consumer_decoder_shard_selected", fetchAt, map[string]interface{}{
+				"topic":         kafkaMessage.Topic,
+				"partition":     kafkaMessage.Partition,
+				"offset":        kafkaMessage.Offset,
+				"kafka_reader":  readerID,
+				"decoder_shard": lane,
+				"session_lane":  lane,
 			})
-			lag := r.claim.HighWaterMarkOffset() - kafkaMessage.Offset - 1
-			if lag < 0 {
-				lag = 0
+			pressure.ObserveBenchmarkEventAt(messageIDFromKafkaHeaders(kafkaMessage), "consumer_session_lane_selected", fetchAt, map[string]interface{}{
+				"topic":        kafkaMessage.Topic,
+				"partition":    kafkaMessage.Partition,
+				"offset":       kafkaMessage.Offset,
+				"kafka_reader": readerID,
+				"session_lane": lane,
+			})
+			pressure.ObserveBenchmarkEventAt(messageIDFromKafkaHeaders(kafkaMessage), "consumer_fetch_done", fetchAt, map[string]interface{}{
+				"topic":                         kafkaMessage.Topic,
+				"partition":                     kafkaMessage.Partition,
+				"offset":                        kafkaMessage.Offset,
+				"kafka_reader":                  readerID,
+				"decoder_shard":                 lane,
+				"session_lane":                  lane,
+				"select_wait_ms":                float64(fetchAt.Sub(selectStart).Microseconds()) / 1000.0,
+				"messages_ch_len_before_select": messagesLenBeforeSelect,
+				"messages_ch_len_after_receive": len(messagesCh),
+				"complete_ch_len_before_select": completeLenBeforeSelect,
+				"backlog_before_select":         backlogBeforeSelect,
+			})
+			pressure.ObserveBenchmarkEventAt(messageIDFromKafkaHeaders(kafkaMessage), "consumer_ingress_enqueue_start", time.Now(), map[string]interface{}{
+				"topic":          kafkaMessage.Topic,
+				"partition":      kafkaMessage.Partition,
+				"offset":         kafkaMessage.Offset,
+				"kafka_reader":   readerID,
+				"decoder_shard":  lane,
+				"session_lane":   lane,
+				"ingress_ch_len": len(laneCh),
+			})
+			select {
+			case <-r.server.done:
+				doneCh <- nil
+				return
+			case laneCh <- conversationBucketSessionLaneItem{
+				kafkaMessage: kafkaMessage,
+				readerID:     readerID,
+				lane:         lane,
+			}:
+				pressure.ObserveBenchmarkEvent(messageIDFromKafkaHeaders(kafkaMessage), "consumer_ingress_enqueue_done", map[string]interface{}{
+					"topic":          kafkaMessage.Topic,
+					"partition":      kafkaMessage.Partition,
+					"offset":         kafkaMessage.Offset,
+					"kafka_reader":   readerID,
+					"decoder_shard":  lane,
+					"session_lane":   lane,
+					"ingress_ch_len": len(laneCh),
+				})
 			}
-			observability.ObserveKafkaConsumePull(consumerGroup, kafkaMessage.Topic, kafkaMessage.Partition, lag)
-			decoded, err := decodeConsumedMessage(kafkaMessage)
-			if err != nil {
-				stage, retryable := consumerErrorMeta(err)
-				if !retryable {
-					if dlqErr := writeKafkaMessageToDLQ(kafkaMessage, nil, stage, false, err); dlqErr != nil {
-						zlog.Error(dlqErr.Error())
-					}
-				}
-				observability.ObserveKafkaConsumeFailure(consumerGroup, kafkaMessage.Topic, kafkaMessage.Partition, stage)
-				if retryable {
-					observability.ObserveKafkaConsumeHandled(consumerGroup, kafkaMessage.Topic, kafkaMessage.Partition, "retryable_failure")
-					continue
-				}
-				observability.ObserveKafkaConsumeHandled(consumerGroup, kafkaMessage.Topic, kafkaMessage.Partition, "non_retryable_failure")
-				r.session.MarkMessage(kafkaMessage, "")
-				observability.ObserveKafkaConsumeMarked(consumerGroup, kafkaMessage.Topic, kafkaMessage.Partition)
-				pendingCommitCount++
-				if pendingCommitCount >= r.commitBatchSize {
-					flushPending()
-					continue
-				}
-				armCommitTimer()
-				continue
-			}
-			if r.nextMarkOffset < 0 {
-				r.nextMarkOffset = kafkaMessage.Offset
-			}
-			r.incrementInflight()
-			if !r.enqueue(decoded) {
-				r.setPendingMessage(&decoded)
-			}
+			observability.ObserveKafkaConsumePull(consumerGroup, kafkaMessage.Topic, kafkaMessage.Partition, kafkaConsumerLag(r.claim, kafkaMessage))
 		}
 	}
+}
+
+func (r *conversationBucketClaimRunner) runSessionLane(consumerGroup string, lane int, laneCh <-chan conversationBucketSessionLaneItem, doneCh chan<- struct{}) {
+	defer close(doneCh)
+	for {
+		select {
+		case <-r.server.done:
+			return
+		case item, ok := <-laneCh:
+			if !ok {
+				return
+			}
+			kafkaMessage := item.kafkaMessage
+			if kafkaMessage == nil {
+				continue
+			}
+			r.handleSessionLaneMessage(consumerGroup, lane, laneCh, kafkaMessage)
+		}
+	}
+}
+
+func (r *conversationBucketClaimRunner) handleSessionLaneMessage(consumerGroup string, lane int, laneCh <-chan conversationBucketSessionLaneItem, kafkaMessage *sarama.ConsumerMessage) {
+	r.ensureNextMarkOffset(kafkaMessage.Offset)
+
+	for r.shouldPauseConsume() {
+		select {
+		case <-r.server.done:
+			return
+		case <-time.After(2 * time.Millisecond):
+		}
+	}
+
+	messageID := messageIDFromKafkaHeaders(kafkaMessage)
+	pressure.ObserveBenchmarkEvent(messageID, "consumer_ingress_dequeue", map[string]interface{}{
+		"topic":          kafkaMessage.Topic,
+		"partition":      kafkaMessage.Partition,
+		"offset":         kafkaMessage.Offset,
+		"decoder_shard":  lane,
+		"session_lane":   lane,
+		"ingress_ch_len": len(laneCh),
+	})
+
+	decoded, err := decodeConsumedMessage(kafkaMessage)
+	pressure.ObserveBenchmarkEvent(messageIDFromDecodedMessage(messageID, decoded), "consumer_decoded_enqueue_start", map[string]interface{}{
+		"topic":          kafkaMessage.Topic,
+		"partition":      kafkaMessage.Partition,
+		"offset":         kafkaMessage.Offset,
+		"decoder_shard":  lane,
+		"session_lane":   lane,
+		"decoded_ch_len": 0,
+	})
+	pressure.ObserveBenchmarkEvent(messageIDFromDecodedMessage(messageID, decoded), "consumer_decoded_enqueue_done", map[string]interface{}{
+		"topic":          kafkaMessage.Topic,
+		"partition":      kafkaMessage.Partition,
+		"offset":         kafkaMessage.Offset,
+		"decoder_shard":  lane,
+		"session_lane":   lane,
+		"decoded_ch_len": 0,
+	})
+
+	r.routeDecodedFromSessionLane(consumerGroup, lane, kafkaMessage, decoded, err)
+}
+
+func (r *conversationBucketClaimRunner) routeDecodedFromSessionLane(consumerGroup string, lane int, kafkaMessage *sarama.ConsumerMessage, decoded decodedConsumedMessage, decodeErr error) {
+	messageID := messageIDFromDecodedMessage(messageIDFromKafkaHeaders(kafkaMessage), decoded)
+	pressure.ObserveBenchmarkEvent(messageID, "consumer_decoded_dequeue", map[string]interface{}{
+		"topic":          kafkaMessage.Topic,
+		"partition":      kafkaMessage.Partition,
+		"offset":         kafkaMessage.Offset,
+		"decoder_shard":  lane,
+		"session_lane":   lane,
+		"decoded_ch_len": 0,
+		"backlog":        r.currentStateBacklog(),
+	})
+	pressure.ObserveBenchmarkEvent(messageID, "consumer_dispatcher_dequeue", map[string]interface{}{
+		"topic":          kafkaMessage.Topic,
+		"partition":      kafkaMessage.Partition,
+		"offset":         kafkaMessage.Offset,
+		"decoder_shard":  lane,
+		"session_lane":   lane,
+		"decoded_ch_len": 0,
+		"backlog":        r.currentStateBacklog(),
+	})
+
+	if decodeErr != nil {
+		stage, retryable := consumerErrorMeta(decodeErr)
+		if !retryable {
+			if dlqErr := writeKafkaMessageToDLQ(kafkaMessage, nil, stage, false, decodeErr); dlqErr != nil {
+				zlog.Error(dlqErr.Error())
+			}
+		}
+		observability.ObserveKafkaConsumeFailure(consumerGroup, kafkaMessage.Topic, kafkaMessage.Partition, stage)
+		if retryable {
+			observability.ObserveKafkaConsumeHandled(consumerGroup, kafkaMessage.Topic, kafkaMessage.Partition, "retryable_failure")
+			return
+		}
+		observability.ObserveKafkaConsumeHandled(consumerGroup, kafkaMessage.Topic, kafkaMessage.Partition, "non_retryable_failure")
+		r.incrementInflight()
+		r.completeCh <- &conversationBucketProcessResult{
+			job: &conversationBucketJob{
+				kafkaMessage: kafkaMessage,
+			},
+			err:       decodeErr,
+			markable:  true,
+			retryable: false,
+		}
+		return
+	}
+
+	pressure.ObserveBenchmarkEvent(decoded.messageID, "consumer_route_enqueue_start", map[string]interface{}{
+		"topic":            kafkaMessage.Topic,
+		"partition":        kafkaMessage.Partition,
+		"offset":           kafkaMessage.Offset,
+		"decoder_shard":    lane,
+		"session_lane":     lane,
+		"conversation_key": decoded.conversationKey,
+		"route_ch_len":     0,
+		"backlog":          r.currentStateBacklog(),
+	})
+	pressure.ObserveBenchmarkEvent(decoded.messageID, "consumer_route_enqueue_done", map[string]interface{}{
+		"topic":            kafkaMessage.Topic,
+		"partition":        kafkaMessage.Partition,
+		"offset":           kafkaMessage.Offset,
+		"decoder_shard":    lane,
+		"session_lane":     lane,
+		"conversation_key": decoded.conversationKey,
+		"route_ch_len":     0,
+		"backlog":          r.currentStateBacklog(),
+	})
+
+	for {
+		for r.shouldPauseConsume() {
+			select {
+			case <-r.server.done:
+				return
+			case <-time.After(2 * time.Millisecond):
+			}
+		}
+
+		routeAt := time.Now()
+		pressure.ObserveBenchmarkEventAt(decoded.messageID, "consumer_route_dequeue", routeAt, map[string]interface{}{
+			"topic":            kafkaMessage.Topic,
+			"partition":        kafkaMessage.Partition,
+			"offset":           kafkaMessage.Offset,
+			"decoder_shard":    lane,
+			"session_lane":     lane,
+			"conversation_key": decoded.conversationKey,
+			"route_ch_len":     0,
+			"backlog":          r.currentStateBacklog(),
+		})
+
+		if r.enqueue(decoded) {
+			r.incrementInflight()
+			return
+		}
+
+		select {
+		case <-r.server.done:
+			return
+		case <-time.After(2 * time.Millisecond):
+		}
+	}
+}
+
+func messageIDFromDecodedMessage(fallback string, decoded decodedConsumedMessage) string {
+	if decoded.messageID != "" {
+		return decoded.messageID
+	}
+	return fallback
+}
+
+func sessionLaneForKafkaMessage(message *sarama.ConsumerMessage, laneCount int) int {
+	if laneCount <= 1 || message == nil {
+		return 0
+	}
+	key := message.Key
+	if len(key) == 0 {
+		key = []byte(messageIDFromKafkaHeaders(message))
+	}
+	if len(key) == 0 {
+		return int(message.Offset % int64(laneCount))
+	}
+	hasher := fnv.New32a()
+	_, _ = hasher.Write(key)
+	return int(hasher.Sum32() % uint32(laneCount))
+}
+
+func kafkaConsumerLag(claim sarama.ConsumerGroupClaim, message *sarama.ConsumerMessage) int64 {
+	if claim == nil || message == nil {
+		return 0
+	}
+	lag := claim.HighWaterMarkOffset() - message.Offset - 1
+	if lag < 0 {
+		return 0
+	}
+	return lag
 }
 
 func (r *conversationBucketClaimRunner) drainCompleteBatch(pendingCommitCount *int, flushPending func(), armCommitTimer func()) int {
@@ -347,6 +662,8 @@ func (r *conversationBucketClaimRunner) handleComplete(result *conversationBucke
 		return
 	}
 	r.decrementInflight()
+	r.markMu.Lock()
+	defer r.markMu.Unlock()
 	r.completed[result.job.kafkaMessage.Offset] = result
 	for {
 		next, ok := r.completed[r.nextMarkOffset]
@@ -372,6 +689,14 @@ func (r *conversationBucketClaimRunner) handleComplete(result *conversationBucke
 	}
 }
 
+func (r *conversationBucketClaimRunner) ensureNextMarkOffset(offset int64) {
+	r.markMu.Lock()
+	defer r.markMu.Unlock()
+	if r.nextMarkOffset < 0 {
+		r.nextMarkOffset = offset
+	}
+}
+
 func (r *conversationBucketClaimRunner) enqueue(decoded decodedConsumedMessage) bool {
 	job := &conversationBucketJob{
 		kafkaMessage: decoded.kafkaMessage,
@@ -385,14 +710,24 @@ func (r *conversationBucketClaimRunner) enqueue(decoded decodedConsumedMessage) 
 
 	bucket := r.getOrCreateBucket(decoded.conversationKey)
 	bucket.mu.Lock()
+	bucketQueueLenBefore := len(bucket.queue)
 	if len(bucket.queue) >= r.maxBucketDepth {
 		bucket.mu.Unlock()
 		r.observeBucketGCSkipped("bucket_depth_limit")
 		return false
 	}
 	bucket.queue = append(bucket.queue, job)
+	bucketQueueLenAfter := len(bucket.queue)
 	bucket.mu.Unlock()
 	r.incrementQueued()
+	pressure.ObserveBenchmarkEvent(job.decoded.messageID, "conversation_bucket_enqueue_done", map[string]interface{}{
+		"partition":               decoded.kafkaMessage.Partition,
+		"offset":                  decoded.kafkaMessage.Offset,
+		"conversation_key":        decoded.conversationKey,
+		"bucket_queue_len_before": bucketQueueLenBefore,
+		"bucket_queue_len_after":  bucketQueueLenAfter,
+		"total_backlog":           r.currentStateBacklog(),
+	})
 	r.enqueueBucketReady(bucket)
 	return true
 }
@@ -449,6 +784,7 @@ func (r *conversationBucketClaimRunner) enqueueBucketReady(bucket *conversationB
 			"partition":        job.kafkaMessage.Partition,
 			"offset":           job.kafkaMessage.Offset,
 			"conversation_key": job.decoded.conversationKey,
+			"ready_ch_len":     len(r.readyCh),
 		})
 	}
 
@@ -456,6 +792,14 @@ func (r *conversationBucketClaimRunner) enqueueBucketReady(bucket *conversationB
 	case <-r.stopCh:
 		return
 	case r.readyCh <- bucket:
+		for _, job := range jobs {
+			pressure.ObserveBenchmarkEvent(job.decoded.messageID, "conversation_ready_enqueue_done", map[string]interface{}{
+				"partition":        job.kafkaMessage.Partition,
+				"offset":           job.kafkaMessage.Offset,
+				"conversation_key": job.decoded.conversationKey,
+				"ready_ch_len":     len(r.readyCh),
+			})
+		}
 	}
 }
 
@@ -484,6 +828,38 @@ func (r *conversationBucketClaimRunner) runWorker(workerIndex int) {
 func (r *conversationBucketClaimRunner) runBucketTurn(workerIndex int, bucket *conversationBucketState) {
 	start := time.Now()
 	processed := 0
+	var currentJob *conversationBucketJob
+
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			r.logWorkerPanic(workerIndex, currentJob, recovered)
+			if currentJob != nil {
+				if currentJob.kafkaMessage != nil {
+					panicErr := fmt.Errorf("conversation bucket panic: %v", recovered)
+					if dlqErr := writeKafkaMessageToDLQ(currentJob.kafkaMessage, &currentJob.decoded, "conversation_bucket_worker_panic", false, panicErr); dlqErr != nil {
+						zlog.Error(dlqErr.Error())
+					}
+				}
+				select {
+				case <-r.stopCh:
+				case r.completeCh <- &conversationBucketProcessResult{
+					job:       currentJob,
+					err:       fmt.Errorf("conversation bucket panic: %v", recovered),
+					markable:  true,
+					retryable: false,
+				}:
+				}
+			}
+
+			bucket.mu.Lock()
+			hasMore := len(bucket.queue) > 0
+			bucket.running = false
+			bucket.mu.Unlock()
+			if hasMore {
+				r.enqueueBucketReady(bucket)
+			}
+		}
+	}()
 
 	bucket.mu.Lock()
 	bucket.queued = false
@@ -499,6 +875,7 @@ func (r *conversationBucketClaimRunner) runBucketTurn(workerIndex int, bucket *c
 		}
 		job := bucket.queue[0]
 		bucket.queue = bucket.queue[1:]
+		currentJob = job
 		bucket.mu.Unlock()
 		r.decrementQueued()
 
@@ -523,6 +900,7 @@ func (r *conversationBucketClaimRunner) runBucketTurn(workerIndex int, bucket *c
 			return
 		case r.completeCh <- result:
 		}
+		currentJob = nil
 		processed++
 	}
 
@@ -862,48 +1240,70 @@ func (r *conversationBucketClaimRunner) observeBucketGCSkipped(reason string) {
 }
 
 func (r *conversationBucketClaimRunner) processJob(workerIndex int, job *conversationBucketJob) *conversationBucketProcessResult {
-	for {
-		totalStart := time.Now()
-		pressure.ObserveBenchmarkEvent(job.decoded.messageID, "conversation_dispatch_start", map[string]interface{}{
-			"partition":        job.kafkaMessage.Partition,
-			"offset":           job.kafkaMessage.Offset,
-			"worker_index":     workerIndex,
-			"conversation_key": job.decoded.conversationKey,
-		})
-		err := handleDecodedConsumedMessage(r.server, job.decoded)
-		pressure.ObserveBenchmarkEvent(job.decoded.messageID, "consumer_total_done", map[string]interface{}{
-			"partition":        job.kafkaMessage.Partition,
-			"offset":           job.kafkaMessage.Offset,
-			"worker_index":     workerIndex,
-			"conversation_key": job.decoded.conversationKey,
-		})
-		observability.ObserveKafkaConsumerStageDuration(
-			config.GetConfig().KafkaConfig.ResolveConsumerGroup(),
-			job.kafkaMessage.Topic,
-			job.kafkaMessage.Partition,
-			"total",
-			time.Since(totalStart),
-		)
-		if err == nil {
-			observability.ObserveKafkaConsumeHandled(config.GetConfig().KafkaConfig.ResolveConsumerGroup(), job.kafkaMessage.Topic, job.kafkaMessage.Partition, "success")
-			return &conversationBucketProcessResult{job: job, markable: true}
-		}
+	consumerGroup := config.GetConfig().KafkaConfig.ResolveConsumerGroup()
+	topic := job.kafkaMessage.Topic
+	partition := job.kafkaMessage.Partition
 
-		stage, retryable := consumerErrorMeta(err)
-		observability.ObserveKafkaConsumeFailure(config.GetConfig().KafkaConfig.ResolveConsumerGroup(), job.kafkaMessage.Topic, job.kafkaMessage.Partition, stage)
-		if !retryable {
-			if dlqErr := writeKafkaMessageToDLQ(job.kafkaMessage, &job.decoded, stage, false, err); dlqErr != nil {
-				zlog.Error(dlqErr.Error())
+	// 可重试失败不再无限原地重试：受次数上限、指数退避和总耗时上限共同约束，
+	// 预算耗尽后按不可重试处置（写死信 + 放行位点），避免一条毒丸消息永久钉住
+	// 一个 worker 和一个会话桶，进而让整个分区停摆。
+	outcome, stage, err, attempts := consumeWithRetryBudget(
+		resolveConsumeRetryPolicy(),
+		func() error {
+			totalStart := time.Now()
+			pressure.ObserveBenchmarkEvent(job.decoded.messageID, "conversation_dispatch_start", map[string]interface{}{
+				"partition":        job.kafkaMessage.Partition,
+				"offset":           job.kafkaMessage.Offset,
+				"worker_index":     workerIndex,
+				"conversation_key": job.decoded.conversationKey,
+			})
+			attemptErr := handleDecodedConsumedMessage(r.server, job.decoded)
+			pressure.ObserveBenchmarkEvent(job.decoded.messageID, "consumer_total_done", map[string]interface{}{
+				"partition":        job.kafkaMessage.Partition,
+				"offset":           job.kafkaMessage.Offset,
+				"worker_index":     workerIndex,
+				"conversation_key": job.decoded.conversationKey,
+			})
+			observability.ObserveKafkaConsumerStageDuration(consumerGroup, topic, partition, "total", time.Since(totalStart))
+			if attemptErr != nil {
+				attemptStage, _ := consumerErrorMeta(attemptErr)
+				observability.ObserveKafkaConsumeFailure(consumerGroup, topic, partition, attemptStage)
 			}
-			observability.ObserveKafkaConsumeHandled(config.GetConfig().KafkaConfig.ResolveConsumerGroup(), job.kafkaMessage.Topic, job.kafkaMessage.Partition, "non_retryable_failure")
-			return &conversationBucketProcessResult{job: job, err: err, markable: true, retryable: false}
-		}
+			return attemptErr
+		},
+		func() bool {
+			select {
+			case <-r.stopCh:
+				return true
+			default:
+				return false
+			}
+		},
+	)
 
-		observability.ObserveKafkaConsumeHandled(config.GetConfig().KafkaConfig.ResolveConsumerGroup(), job.kafkaMessage.Topic, job.kafkaMessage.Partition, "retryable_failure")
-		select {
-		case <-r.stopCh:
-			return &conversationBucketProcessResult{job: job, err: err, markable: false, retryable: true}
-		case <-time.After(200 * time.Millisecond):
+	switch outcome {
+	case consumeRetrySucceeded:
+		observability.ObserveKafkaConsumeHandled(consumerGroup, topic, partition, "success")
+		return &conversationBucketProcessResult{job: job, markable: true}
+
+	case consumeRetryStopped:
+		// 停机：这条消息还没有了结，位点必须保持不动，留给下次重放。
+		observability.ObserveKafkaConsumeHandled(consumerGroup, topic, partition, "retryable_failure")
+		return &conversationBucketProcessResult{job: job, err: err, markable: false, retryable: true}
+
+	case consumeRetryNonRetryable:
+		if dlqErr := writeKafkaMessageToDLQ(job.kafkaMessage, &job.decoded, stage, false, err); dlqErr != nil {
+			zlog.Error(dlqErr.Error())
 		}
+		observability.ObserveKafkaConsumeHandled(consumerGroup, topic, partition, "non_retryable_failure")
+		return &conversationBucketProcessResult{job: job, err: err, markable: true, retryable: false}
+
+	default: // consumeRetryExhausted
+		logConsumeRetryBudgetExhausted("chat.kafka", job.kafkaMessage, stage, attempts, err)
+		if dlqErr := writeKafkaMessageToDLQ(job.kafkaMessage, &job.decoded, stage, false, err); dlqErr != nil {
+			zlog.Error(dlqErr.Error())
+		}
+		observability.ObserveKafkaConsumeHandled(consumerGroup, topic, partition, "retry_budget_exhausted")
+		return &conversationBucketProcessResult{job: job, err: err, markable: true, retryable: false}
 	}
 }

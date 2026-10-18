@@ -100,7 +100,7 @@ func replayGroupMemberQuery(record *model.DLQMessage) dlqservice.ReplayResult {
 		nextRetryAt := time.Now().Add(30 * time.Second)
 		return dlqservice.ReplayResult{Success: false, Retryable: true, NextRetryAt: &nextRetryAt, FinalError: fmt.Errorf("kafka server unavailable")}
 	}
-	if err := KafkaChatServer.handleConsumedGroupMessage(nil, &message, message.SendAvatar, message.Uuid); err != nil {
+	if err := KafkaChatServer.handleConsumedGroupMessage(nil, &message, message.SendAvatar, message.Uuid, ""); err != nil {
 		nextRetryAt := time.Now().Add(30 * time.Second)
 		return dlqservice.ReplayResult{Success: false, Retryable: true, NextRetryAt: &nextRetryAt, FinalError: err}
 	}
@@ -200,7 +200,7 @@ func dispatchPersistedMessage(message *model.Message, sendAvatar string, message
 		if KafkaChatServer == nil {
 			return fmt.Errorf("kafka server unavailable")
 		}
-		return KafkaChatServer.handleConsumedGroupMessage(nil, message, sendAvatar, messageBackUUID)
+		return KafkaChatServer.handleConsumedGroupMessage(nil, message, sendAvatar, messageBackUUID, "")
 	default:
 		return fmt.Errorf("unsupported receive_id: %s", message.ReceiveId)
 	}
@@ -231,7 +231,7 @@ func dispatchUserMessage(message *model.Message, sendAvatar string, messageBackU
 		if err != nil {
 			return err
 		}
-		KafkaChatServer.dispatchToKafkaRecipients([]string{message.ReceiveId, message.SendId}, payload, messageBackUUID)
+		KafkaChatServer.dispatchToKafkaRecipients([]string{message.ReceiveId, message.SendId}, payload, messageBackUUID, message.ConversationKey)
 		return nil
 	case message_type_enum.AudioOrVideo:
 		messageRsp := respond.AVMessageRespond{
@@ -254,7 +254,7 @@ func dispatchUserMessage(message *model.Message, sendAvatar string, messageBackU
 		if err != nil {
 			return err
 		}
-		KafkaChatServer.dispatchToKafkaRecipients([]string{message.ReceiveId}, payload, messageBackUUID)
+		KafkaChatServer.dispatchToKafkaRecipients([]string{message.ReceiveId}, payload, messageBackUUID, message.ConversationKey)
 		return nil
 	default:
 		return fmt.Errorf("unsupported message type: %d", message.Type)

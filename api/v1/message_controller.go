@@ -3,9 +3,9 @@ package v1
 // 本文件实现 message controller 相关的 HTTP 控制器入口，负责参数绑定、调用 service 并返回统一响应。
 
 import (
-	"github.com/gin-gonic/gin"
 	"echo_chat_server/internal/dto/request"
 	"echo_chat_server/internal/service/gorm"
+	"github.com/gin-gonic/gin"
 )
 
 // GetMessageList 获取聊天记录
@@ -18,7 +18,7 @@ func GetMessageList(c *gin.Context) {
 	if !ok {
 		return
 	}
-	message, rsp, ret := gorm.MessageService.GetMessageList(currentActorID(c), otherUserID)
+	message, rsp, ret := gorm.MessageService.GetMessageList(currentActorID(c), otherUserID, req.BeforeSeq, req.Limit)
 	JsonBack(c, message, ret, rsp)
 }
 
@@ -31,7 +31,7 @@ func GetGroupMessageList(c *gin.Context) {
 	if !ensureGroupMember(c, req.GroupId, "api.message.group_list") {
 		return
 	}
-	message, rsp, ret := gorm.MessageService.GetGroupMessageList(req.GroupId)
+	message, rsp, ret := gorm.MessageService.GetGroupMessageList(req.GroupId, req.BeforeSeq, req.Limit)
 	JsonBack(c, message, ret, rsp)
 }
 

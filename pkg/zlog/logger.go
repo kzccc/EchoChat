@@ -3,10 +3,12 @@ package zlog
 // 本文件负责初始化项目级日志组件，统一输出到控制台和日志文件。
 
 import (
+	"sync"
+
+	"echo_chat_server/internal/config"
 	"github.com/natefinch/lumberjack"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
-	"echo_chat_server/internal/config"
 	"os"
 	"path"
 	"path/filepath"
@@ -19,6 +21,22 @@ var logger *zap.Logger
 
 // logPath 记录当前日志输出文件位置，供切割器等辅助方法使用。
 var logPath string
+
+type logEvent struct {
+	level  zapcore.Level
+	msg    string
+	fields []zap.Field
+}
+
+const logQueueSize = 10000
+
+var (
+	logCh     chan logEvent
+	logWG     sync.WaitGroup
+	logMu     sync.RWMutex
+	logClosed bool
+	closeOnce sync.Once
+)
 
 // init 在包加载时完成日志编码器、输出目标和双写核心的初始化。
 func init() {
@@ -60,6 +78,10 @@ func init() {
 
 	// 将标准库的 log 包输出重定向到当前 zap logger，统一日志出口
 	_ = zap.RedirectStdLog(logger) // 捕获所有通过 stdlib log.Print 等输出的日志
+
+	logCh = make(chan logEvent, logQueueSize)
+	logWG.Add(1)
+	go logWorker()
 }
 
 func parseLevel(raw string) zapcore.Level {
@@ -111,37 +133,100 @@ func getCallerInfoForLog() (callerFields []zap.Field) {
 	return
 }
 
+func withCallerFields(fields []zap.Field) []zap.Field {
+	callerFields := getCallerInfoForLog()
+	copied := make([]zap.Field, 0, len(fields)+len(callerFields))
+	copied = append(copied, fields...)
+	copied = append(copied, callerFields...)
+	return copied
+}
+
+func logWorker() {
+	defer logWG.Done()
+	for event := range logCh {
+		write(event.level, event.msg, event.fields...)
+	}
+}
+
+func write(level zapcore.Level, message string, fields ...zap.Field) {
+	switch level {
+	case zapcore.DebugLevel:
+		logger.Debug(message, fields...)
+	case zapcore.InfoLevel:
+		logger.Info(message, fields...)
+	case zapcore.WarnLevel:
+		logger.Warn(message, fields...)
+	case zapcore.ErrorLevel:
+		logger.Error(message, fields...)
+	case zapcore.FatalLevel:
+		logger.Fatal(message, fields...)
+	default:
+		logger.Info(message, fields...)
+	}
+}
+
+func enqueue(level zapcore.Level, message string, fields ...zap.Field) {
+	event := logEvent{
+		level:  level,
+		msg:    message,
+		fields: withCallerFields(fields),
+	}
+
+	logMu.RLock()
+	if logClosed {
+		logMu.RUnlock()
+		if level >= zapcore.WarnLevel {
+			write(level, event.msg, event.fields...)
+		}
+		return
+	}
+
+	select {
+	case logCh <- event:
+		logMu.RUnlock()
+	default:
+		logMu.RUnlock()
+		if level >= zapcore.WarnLevel {
+			write(level, event.msg, event.fields...)
+		}
+	}
+}
+
 // Info 输出 info 级别日志，并自动补齐调用位置信息。
 func Info(message string, fields ...zap.Field) {
-	callerFields := getCallerInfoForLog()
-	fields = append(fields, callerFields...)
-	logger.Info(message, fields...)
+	enqueue(zapcore.InfoLevel, message, fields...)
 }
 
 // Warn 输出 warn 级别日志，并自动补齐调用位置信息。
 func Warn(message string, fields ...zap.Field) {
-	callerFields := getCallerInfoForLog()
-	fields = append(fields, callerFields...)
-	logger.Warn(message, fields...)
+	enqueue(zapcore.WarnLevel, message, fields...)
 }
 
 // Error 输出 error 级别日志，并自动补齐调用位置信息。
 func Error(message string, fields ...zap.Field) {
-	callerFields := getCallerInfoForLog()
-	fields = append(fields, callerFields...)
-	logger.Error(message, fields...)
+	enqueue(zapcore.ErrorLevel, message, fields...)
 }
 
 // Fatal 输出 fatal 级别日志，并在记录后终止进程。
 func Fatal(message string, fields ...zap.Field) {
-	callerFields := getCallerInfoForLog()
-	fields = append(fields, callerFields...)
+	fields = withCallerFields(fields)
+	_ = Shutdown()
 	logger.Fatal(message, fields...)
 }
 
 // Debug 输出 debug 级别日志，并自动补齐调用位置信息。
 func Debug(message string, fields ...zap.Field) {
-	callerFields := getCallerInfoForLog()
-	fields = append(fields, callerFields...)
-	logger.Debug(message, fields...)
+	enqueue(zapcore.DebugLevel, message, fields...)
+}
+
+// Shutdown 关闭异步日志队列，等待剩余日志写完，并刷新底层 zap logger。
+func Shutdown() error {
+	closeOnce.Do(func() {
+		logMu.Lock()
+		logClosed = true
+		close(logCh)
+		logMu.Unlock()
+		logWG.Wait()
+	})
+	return logger.Sync()
 }

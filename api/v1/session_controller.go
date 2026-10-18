@@ -3,9 +3,9 @@ package v1
 // 本文件实现 session controller 相关的 HTTP 控制器入口，负责参数绑定、调用 service 并返回统一响应。
 
 import (
-	"github.com/gin-gonic/gin"
 	"echo_chat_server/internal/dto/request"
 	"echo_chat_server/internal/service/gorm"
+	"github.com/gin-gonic/gin"
 )
 
 // OpenSession 打开会话
@@ -58,4 +58,14 @@ func CheckOpenSessionAllowed(c *gin.Context) {
 	req.SendId = currentActorID(c)
 	message, res, ret := gorm.SessionService.CheckOpenSessionAllowed(req.SendId, req.ReceiveId)
 	JsonBack(c, message, ret, res)
+}
+
+// MarkConversationRead 上报当前用户在某个会话中的已读进度。
+func MarkConversationRead(c *gin.Context) {
+	var req request.MarkReadRequest
+	if !BindJSONOrError(c, &req, "api.session.mark_read") {
+		return
+	}
+	message, ret := gorm.SessionService.MarkConversationRead(currentActorID(c), req.ConversationKey, req.LastReadSeq)
+	JsonBack(c, message, ret, nil)
 }

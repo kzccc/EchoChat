@@ -1,0 +1,18 @@
+.git
+.idea
+.vscode
+logs/
+runtime/
+tmp/
+*.log
+
+node_modules/
+web/chat-server/node_modules/
+web/chat-server/dist/
+
+deploy/kafka5/runtime/
+deploy/kafka5/logs/
+pressure testing/
+pressure workable/
+docs/k6_message_test/generated/
+docs/k6_message_test/results/

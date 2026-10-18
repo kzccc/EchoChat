@@ -2,8 +2,10 @@ package request
 
 // ChatMessageRequest 描述该接口使用的请求参数结构。
 type ChatMessageRequest struct {
-	// MessageId 保存当前消息的业务唯一标识，用于 Kafka 可靠投递和后续幂等处理。
+	// MessageId 保存服务端生成的消息唯一标识，用于落库、分发和 Kafka 链路追踪。
 	MessageId string `json:"message_id,omitempty"`
+	// ClientMsgID 保存客户端生成的消息标识，只用于入口幂等。
+	ClientMsgID string `json:"client_msg_id,omitempty"`
 	// SessionId 保存前端传入的 `session_id` 参数。
 	SessionId string `json:"session_id"`
 	// Type 保存前端传入的 `type` 参数。

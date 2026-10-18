@@ -4,6 +4,7 @@ import (
 	"hash/fnv"
 	"time"
 
+	"echo_chat_server/internal/config"
 	"echo_chat_server/internal/dao"
 	"echo_chat_server/internal/model"
 	"echo_chat_server/internal/observability"
@@ -12,8 +13,9 @@ import (
 )
 
 type statusUpdateJob struct {
-	uuid  string
-	route string
+	uuid            string
+	conversationKey string
+	route           string
 }
 
 type statusUpdateDispatcher struct {
@@ -47,11 +49,11 @@ func (d *statusUpdateDispatcher) workerIndex(uuid string) int {
 	return int(hasher.Sum32() % uint32(len(d.workers)))
 }
 
-func (d *statusUpdateDispatcher) enqueue(uuid, route string) {
+func (d *statusUpdateDispatcher) enqueue(uuid, conversationKey, route string) {
 	if uuid == "" {
 		return
 	}
-	d.workers[d.workerIndex(uuid)] <- statusUpdateJob{uuid: uuid, route: route}
+	d.workers[d.workerIndex(uuid)] <- statusUpdateJob{uuid: uuid, conversationKey: conversationKey, route: route}
 }
 
 func (d *statusUpdateDispatcher) runWorker(jobs <-chan statusUpdateJob) {
@@ -96,7 +98,36 @@ func (d *statusUpdateDispatcher) flush(batch []statusUpdateJob) {
 	if len(batch) == 0 {
 		return
 	}
+	if publishAsyncPersistStatusBatch(batch) {
+		return
+	}
+	updateMessageStatusBatch(batch, d.enqueue)
+}
 
+func publishAsyncPersistStatusBatch(batch []statusUpdateJob) bool {
+	if !config.GetConfig().KafkaConfig.UseAsyncPersist() {
+		return false
+	}
+	for _, job := range batch {
+		start := time.Now()
+		err := publishPersistStatusUpdate(job.uuid, job.conversationKey, job.route)
+		duration := time.Since(start)
+		if err != nil {
+			observability.ObserveWSStatusUpdate(job.route, duration, "failure")
+			retryJob := job
+			go func() {
+				time.Sleep(20 * time.Millisecond)
+				kafkaStatusUpdater.enqueue(retryJob.uuid, retryJob.conversationKey, retryJob.route)
+			}()
+			zlog.Error(err.Error())
+			continue
+		}
+		observability.ObserveWSStatusUpdate(job.route, duration, "success")
+	}
+	return true
+}
+
+func updateMessageStatusBatch(batch []statusUpdateJob, retry func(uuid, conversationKey, route string)) {
 	seen := make(map[string]struct{}, len(batch))
 	uuids := make([]string, 0, len(batch))
 	for _, job := range batch {
@@ -119,7 +150,7 @@ func (d *statusUpdateDispatcher) flush(batch []statusUpdateJob) {
 			observability.ObserveWSStatusUpdate(job.route, perItemDuration, "failure")
 			go func(retryJob statusUpdateJob) {
 				time.Sleep(20 * time.Millisecond)
-				d.enqueue(retryJob.uuid, retryJob.route)
+				retry(retryJob.uuid, retryJob.conversationKey, retryJob.route)
 			}(job)
 		}
 		zlog.Error(err.Error())

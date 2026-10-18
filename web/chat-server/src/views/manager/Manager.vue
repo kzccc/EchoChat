@@ -1,430 +1,609 @@
 <template>
-  <!-- 管理后台页面负责用户和群组的运营管理操作。 -->
-  <div class="chat-wrap">
-    <div
-      class="chat-window"
-      :style="{
-        boxShadow: `var(${'--el-box-shadow-dark'})`,
-      }"
-    >
-      <el-container class="chat-window-container">
-        <el-header class="header-container">
-        <div style="display: flex; align-items: center; flex-direction: row;">
-          <svg
-            t="1736782942164"
-            class="header-icon"
-            viewBox="0 0 1024 1024"
-            version="1.1"
-            xmlns="http://www.w3.org/2000/svg"
-            p-id="2358"
-            width="200"
-            height="200"
-          >
-            <path
-              d="M512 597.333333v341.333334H170.666667a341.333333 341.333333 0 0 1 341.333333-341.333334z m0-42.666666c-141.44 0-256-114.56-256-256s114.56-256 256-256 256 114.56 256 256-114.56 256-256 256z m384 170.666666h42.666667v213.333334h-341.333334v-213.333334h42.666667v-42.666666a128 128 0 1 1 256 0v42.666666z m-85.333333 0v-42.666666a42.666667 42.666667 0 1 0-85.333334 0v42.666666h85.333334z"
-              p-id="2359"
-              fill="#2c2c2c"
-            ></path>
-          </svg>
-          <div class="header-title">admin</div>
-          </div>
-          <el-button @click="backToChat">返回</el-button>
-        </el-header>
-
-        <el-container>
-          <el-aside class="manager-aside-container">
-            <el-menu unique-opened>
-              <el-sub-menu index="1">
-                <template #title>
-                  <svg
-                    t="1736823523206"
-                    class="manager-user-icon"
-                    viewBox="0 0 1024 1024"
-                    version="1.1"
-                    xmlns="http://www.w3.org/2000/svg"
-                    p-id="1477"
-                    width="200"
-                    height="200"
-                  >
-                    <path
-                      d="M213.333333 896H128v-42.666667a299.008 299.008 0 0 1 298.666667-298.666666h170.666666a299.008 299.008 0 0 1 298.666667 298.666666v42.666667h-85.333333v-42.666667a213.589333 213.589333 0 0 0-213.333334-213.333333h-170.666666a213.589333 213.589333 0 0 0-213.333334 213.333333v42.666667z m298.666667-384a213.333333 213.333333 0 1 1 0-426.666667 213.333333 213.333333 0 0 1 0 426.666667z m0-341.333333a128 128 0 1 0 0 256 128 128 0 0 0 0-256z"
-                      p-id="1478"
-                    ></path>
-                  </svg>
-                  <span class="manager-user-title">用户</span>
-                </template>
-
-                <el-menu-item index="1-1" @click="showDisableUserTable"
-                  ><svg
-                    t="1736825139556"
-                    class="menu-item-icon"
-                    viewBox="0 0 1024 1024"
-                    version="1.1"
-                    xmlns="http://www.w3.org/2000/svg"
-                    p-id="4645"
-                    width="200"
-                    height="200"
-                  >
-                    <path
-                      d="M512 853.333333c-187.733333 0-341.333333-153.6-341.333333-341.333333s153.6-341.333333 341.333333-341.333333 341.333333 153.6 341.333333 341.333333-153.6 341.333333-341.333333 341.333333z m0-85.333333c140.8 0 256-115.2 256-256s-115.2-256-256-256-256 115.2-256 256 115.2 256 256 256zM401.066667 341.333333l273.066666 273.066667-59.733333 59.733333L341.333333 401.066667 401.066667 341.333333z"
-                      fill="#444444"
-                      p-id="4646"
-                    ></path>
-                  </svg>
-                  启用/禁用
-                </el-menu-item>
-                <el-menu-item index="1-2" @click="showDeleteUserTable">
-                  <svg
-                    t="1736825210236"
-                    class="menu-item-icon"
-                    viewBox="0 0 1024 1024"
-                    version="1.1"
-                    xmlns="http://www.w3.org/2000/svg"
-                    p-id="5694"
-                    width="200"
-                    height="200"
-                  >
-                    <path
-                      d="M736.653061 929.959184H287.346939c-45.97551 0-83.591837-37.616327-83.591837-83.591837V355.265306h616.489796v491.102041c0 45.97551-37.616327 83.591837-83.591837 83.591837zM245.55102 397.061224v449.306123c0 22.987755 18.808163 41.795918 41.795919 41.795918h449.306122c22.987755 0 41.795918-18.808163 41.795919-41.795918V397.061224H245.55102z"
-                      fill="#333333"
-                      p-id="5695"
-                    ></path>
-                    <path
-                      d="M407.510204 794.122449c-11.493878 0-20.897959-9.404082-20.897959-20.897959V512c0-11.493878 9.404082-20.897959 20.897959-20.897959s20.897959 9.404082 20.897959 20.897959v261.22449c0 11.493878-9.404082 20.897959-20.897959 20.897959zM616.489796 794.122449c-11.493878 0-20.897959-9.404082-20.897959-20.897959V512c0-11.493878 9.404082-20.897959 20.897959-20.897959s20.897959 9.404082 20.897959 20.897959v261.22449c0 11.493878-9.404082 20.897959-20.897959 20.897959z"
-                      fill="#333333"
-                      p-id="5696"
-                    ></path>
-                    <path
-                      d="M846.367347 397.061224H177.632653c-45.97551 0-83.591837-37.616327-83.591837-83.591836v-31.346939c0-45.97551 37.616327-83.591837 83.591837-83.591837h668.734694c45.97551 0 83.591837 37.616327 83.591837 83.591837v31.346939c0 45.97551-37.616327 83.591837-83.591837 83.591836zM177.632653 240.326531c-22.987755 0-41.795918 18.808163-41.795918 41.795918v31.346939c0 22.987755 18.808163 41.795918 41.795918 41.795918h668.734694c22.987755 0 41.795918-18.808163 41.795918-41.795918v-31.346939c0-22.987755-18.808163-41.795918-41.795918-41.795918H177.632653z"
-                      fill="#333333"
-                      p-id="5697"
-                    ></path>
-                    <path
-                      d="M650.44898 240.326531h-276.89796c-28.734694 0-52.244898-23.510204-52.244898-52.244898v-41.795919c0-28.734694 23.510204-52.244898 52.244898-52.244898h276.89796c28.734694 0 52.244898 23.510204 52.244898 52.244898v41.795919c0 28.734694-23.510204 52.244898-52.244898 52.244898z m-276.89796-104.489796c-5.746939 0-10.44898 4.702041-10.448979 10.448979v41.795919c0 5.746939 4.702041 10.44898 10.448979 10.448979h276.89796c5.746939 0 10.44898-4.702041 10.448979-10.448979v-41.795919c0-5.746939-4.702041-10.44898-10.448979-10.448979h-276.89796z"
-                      fill="#333333"
-                      p-id="5698"
-                    ></path></svg
-                  >删除
-                </el-menu-item>
-                <el-menu-item index="1-3" @click="showSetAdminTable">
-                  <svg
-                    t="1736825411779"
-                    class="menu-item-icon"
-                    viewBox="0 0 1024 1024"
-                    version="1.1"
-                    xmlns="http://www.w3.org/2000/svg"
-                    p-id="6703"
-                    width="200"
-                    height="200"
-                  >
-                    <path
-                      d="M755.2 780.8L896 640l59.733333 59.733333-200.533333 200.533334-119.466667-119.466667 59.733334-59.733333 59.733333 59.733333zM597.333333 768v85.333333H256v-170.666666h4.266667l85.333333-85.333334h375.466667l85.333333 85.333334h-426.666667l-38.4 38.4V768h256z m213.333334-81.066667z m-85.333334-324.266666c0 106.666667-85.333333 192-192 192S341.333333 469.333333 341.333333 362.666667 426.666667 170.666667 533.333333 170.666667 725.333333 256 725.333333 362.666667z m-85.333333 0C640 302.933333 593.066667 256 533.333333 256S426.666667 302.933333 426.666667 362.666667s46.933333 106.666667 106.666666 106.666666S640 422.4 640 362.666667z"
-                      fill="#444444"
-                      p-id="6704"
-                    ></path></svg
-                  >设置为管理员
-                </el-menu-item>
-              </el-sub-menu>
-              <el-sub-menu index="2">
-                <template #title>
-                  <svg
-                    t="1736823667080"
-                    class="manager-group-icon"
-                    viewBox="0 0 1143 1024"
-                    version="1.1"
-                    xmlns="http://www.w3.org/2000/svg"
-                    p-id="3627"
-                    width="200"
-                    height="200"
-                  >
-                    <path
-                      d="M457.238151 0.006532a296.045313 296.045313 0 0 1 285.349798 215.379905 243.465837 243.465837 0 0 1 44.333317-4.082258 237.669031 237.669031 0 0 1 143.777108 428.963617 379.07843 379.07843 0 0 1 212.27739 338.745726v44.904833H38.725113A38.699801 38.699801 0 0 1 0.025312 985.218554a473.541869 473.541869 0 0 1 295.310507-443.578099A294.41241 294.41241 0 0 1 457.238151 0.006532z m-2.939226 589.396336a384.385365 384.385365 0 0 0-374.751237 357.19753h749.502475a384.385365 384.385365 0 0 0-374.751238-357.19753z m358.340563 96.831147h-6.041741a482.359545 482.359545 0 0 1 100.096953 259.713222h156.921978v-0.571516a291.799765 291.799765 0 0 0-251.303771-259.141706z m-25.718222-397.530234a165.902944 165.902944 0 0 0-33.556157 3.429096v2.531a293.922539 293.922539 0 0 1-136.837271 248.446191 450.109711 450.109711 0 0 1 133.32653 82.951472 38.699801 38.699801 0 0 1 33.229576-18.86003q14.369546 0 28.412512 1.143033a160.59601 160.59601 0 0 0-24.493545-319.640762zM457.238151 77.406134a217.257744 217.257744 0 1 0 218.809001 217.257743A218.074195 218.074195 0 0 0 457.238151 77.406134z"
-                      p-id="3628"
-                    ></path>
-                  </svg>
-                  <span class="manager-group-title">群聊</span>
-                </template>
-                <el-menu-item index="2-1" @click="showDisableGroupTable">
-                  <svg
-                    t="1736825139556"
-                    class="menu-item-icon"
-                    viewBox="0 0 1024 1024"
-                    version="1.1"
-                    xmlns="http://www.w3.org/2000/svg"
-                    p-id="4645"
-                    width="200"
-                    height="200"
-                  >
-                    <path
-                      d="M512 853.333333c-187.733333 0-341.333333-153.6-341.333333-341.333333s153.6-341.333333 341.333333-341.333333 341.333333 153.6 341.333333 341.333333-153.6 341.333333-341.333333 341.333333z m0-85.333333c140.8 0 256-115.2 256-256s-115.2-256-256-256-256 115.2-256 256 115.2 256 256 256zM401.066667 341.333333l273.066666 273.066667-59.733333 59.733333L341.333333 401.066667 401.066667 341.333333z"
-                      fill="#444444"
-                      p-id="4646"
-                    ></path>
-                  </svg>
-                  启用/禁用</el-menu-item
-                >
-                <el-menu-item index="2-2" @click="showDeleteGroupTable">
-                  <svg
-                    t="1736825642071"
-                    class="menu-item-icon"
-                    viewBox="0 0 1024 1024"
-                    version="1.1"
-                    xmlns="http://www.w3.org/2000/svg"
-                    p-id="7972"
-                    width="200"
-                    height="200"
-                  >
-                    <path
-                      d="M960 384h-80V144H144v666.519L231.778 752H448v80H256L64 960V64h896v320z m-704-80h512v80H256v-80z m0 208h192v80H256v-80z"
-                      fill="#2c2c2c"
-                      p-id="7973"
-                    ></path>
-                    <path
-                      d="M817.497 704l74.247-74.246-49.498-49.498L768 654.503l-74.246-74.247-49.498 49.498L718.503 704l-74.247 74.246 49.498 49.498L768 753.497l74.246 74.247 49.498-49.498L817.497 704zM767.5 960.107C625.798 960.107 511 845.095 511 703.5 511 561.905 625.798 447 767.5 447S1024 562.012 1024 703.607c0 141.595-114.798 256.5-256.5 256.5z"
-                      fill="#2c2c2c"
-                      p-id="7974"
-                    ></path>
-                  </svg>
-                  删除/解散群聊</el-menu-item
-                >
-              </el-sub-menu>
-              <el-sub-menu index="3">
-                <template #title>
-                  <svg
-                    t="1736823667081"
-                    class="manager-group-icon"
-                    viewBox="0 0 1024 1024"
-                    version="1.1"
-                    xmlns="http://www.w3.org/2000/svg"
-                    p-id="10001"
-                    width="200"
-                    height="200"
-                  >
-                    <path
-                      d="M512 85.333333a341.333333 341.333333 0 1 1 0 682.666667 341.333333 341.333333 0 0 1 0-682.666667z m0 85.333334a256 256 0 1 0 0 512 256 256 0 0 0 0-512z m42.666667 128v170.666666h128v85.333334h-213.333334V298.666667h85.333334z"
-                      fill="#2c2c2c"
-                    ></path>
-                  </svg>
-                  <span class="manager-group-title">DLQ 治理</span>
-                </template>
-                <el-menu-item index="3-1" @click="showDLQGovernanceTable">
-                  <svg
-                    t="1736823667082"
-                    class="menu-item-icon"
-                    viewBox="0 0 1024 1024"
-                    version="1.1"
-                    xmlns="http://www.w3.org/2000/svg"
-                    p-id="10002"
-                    width="200"
-                    height="200"
-                  >
-                    <path
-                      d="M128 128h768v85.333333H128V128z m0 256h768v85.333333H128V384z m0 256h512v85.333333H128v-85.333333z"
-                      fill="#444444"
-                    ></path>
-                  </svg>
-                  故障治理窗口
-                </el-menu-item>
-              </el-sub-menu>
-            </el-menu>
-          </el-aside>
-          <el-main class="manager-main-container"> 
-            <DeleteUserModal :isVisible="isDeleteUserModalVisible"></DeleteUserModal>
-            <DisableUserModal :isVisible="isDisableUserModalVisible"></DisableUserModal>
-            <SetAdminModal :isVisible="isSetAdminModalVisible"></SetAdminModal>
-            <DeleteGroupModal :isVisible="isDeleteGroupModalVisible"></DeleteGroupModal>
-            <DisableGroupModal :isVisible="isDisableGroupModalVisible"></DisableGroupModal>
-            <DLQGovernanceModal :isVisible="isDLQGovernanceModalVisible"></DLQGovernanceModal>
-          </el-main>
-        </el-container>
-      </el-container>
+  <section class="wx-page">
+    <div class="wx-page__header">
+      后台管理
+      <span class="wx-muted" style="margin-left: 10px; font-size: 12px; font-weight: 400">
+        仅管理员可见
+      </span>
     </div>
-  </div>
+
+    <el-tabs v-model="activeTab" class="wx-manager__tabs" @tab-change="onTabChange">
+      <!-- 用户 -->
+      <el-tab-pane label="用户" name="users">
+        <div class="wx-manager__toolbar">
+          <el-input
+            v-model="userKeyword"
+            placeholder="按昵称 / 手机号 / ID 过滤"
+            clearable
+            style="width: 260px"
+          />
+          <el-button :loading="loadingUsers" @click="loadUsers">刷新</el-button>
+        </div>
+
+        <el-table :data="filteredUsers" size="small" height="calc(100vh - 220px)">
+          <el-table-column prop="nickname" label="昵称" min-width="140" show-overflow-tooltip />
+          <el-table-column prop="uuid" label="用户 ID" min-width="180" show-overflow-tooltip />
+          <el-table-column prop="telephone" label="手机号" width="130" />
+          <el-table-column label="状态" width="100">
+            <template #default="{ row }">
+              <el-tag :type="Number(row.status) === 0 ? 'success' : 'info'" size="small">
+                {{ Number(row.status) === 0 ? "正常" : "已禁用" }}
+              </el-tag>
+            </template>
+          </el-table-column>
+          <el-table-column label="管理员" width="90">
+            <template #default="{ row }">
+              <el-tag v-if="Number(row.is_admin) === 1" type="warning" size="small">是</el-tag>
+              <span v-else class="wx-muted">否</span>
+            </template>
+          </el-table-column>
+          <el-table-column label="操作" width="260" fixed="right">
+            <template #default="{ row }">
+              <el-button
+                link
+                size="small"
+                @click="toggleUserStatus(row)"
+              >
+                {{ Number(row.status) === 0 ? "禁用" : "启用" }}
+              </el-button>
+              <el-button link size="small" @click="toggleAdmin(row)">
+                {{ Number(row.is_admin) === 1 ? "取消管理员" : "设为管理员" }}
+              </el-button>
+              <el-button link size="small" type="danger" @click="removeUser(row)">
+                删除
+              </el-button>
+            </template>
+          </el-table-column>
+        </el-table>
+      </el-tab-pane>
+
+      <!-- 群聊 -->
+      <el-tab-pane label="群聊" name="groups">
+        <div class="wx-manager__toolbar">
+          <el-button :loading="loadingGroups" @click="loadGroups">刷新</el-button>
+        </div>
+
+        <el-table :data="groups" size="small" height="calc(100vh - 220px)">
+          <el-table-column prop="name" label="群名称" min-width="180" show-overflow-tooltip />
+          <el-table-column prop="uuid" label="群 ID" min-width="180" show-overflow-tooltip />
+          <el-table-column prop="owner_id" label="群主" min-width="160" show-overflow-tooltip />
+          <el-table-column label="状态" width="100">
+            <template #default="{ row }">
+              <el-tag :type="Number(row.status) === 0 ? 'success' : 'info'" size="small">
+                {{ groupStatusText(row.status) }}
+              </el-tag>
+            </template>
+          </el-table-column>
+          <el-table-column label="操作" width="220" fixed="right">
+            <template #default="{ row }">
+              <el-button link size="small" @click="toggleGroupStatus(row)">
+                {{ Number(row.status) === 0 ? "停用" : "启用" }}
+              </el-button>
+              <el-button link size="small" type="danger" @click="removeGroup(row)">
+                删除
+              </el-button>
+            </template>
+          </el-table-column>
+        </el-table>
+      </el-tab-pane>
+
+      <!-- 死信队列 -->
+      <el-tab-pane label="死信队列" name="dlq">
+        <div class="wx-manager__toolbar">
+          <el-input v-model="dlqFilter.message_id" placeholder="消息 ID" clearable style="width: 200px" />
+          <el-input v-model="dlqFilter.stage" placeholder="失败阶段" clearable style="width: 150px" />
+          <el-select v-model="dlqFilter.status" placeholder="状态" clearable style="width: 130px">
+            <el-option label="待处理" value="PENDING" />
+            <el-option label="重试中" value="RETRYING" />
+            <el-option label="人工处理" value="MANUAL" />
+            <el-option label="已完成" value="DONE" />
+          </el-select>
+          <el-button type="primary" :loading="loadingDlq" @click="loadDlq">查询</el-button>
+        </div>
+
+        <el-table :data="dlqList" size="small" height="calc(100vh - 260px)">
+          <el-table-column prop="id" label="ID" width="80" />
+          <el-table-column prop="message_id" label="消息 ID" min-width="180" show-overflow-tooltip />
+          <el-table-column prop="stage" label="阶段" width="150" show-overflow-tooltip />
+          <el-table-column prop="failure_type" label="失败类型" width="120" />
+          <el-table-column label="自动状态" width="100">
+            <template #default="{ row }">
+              <el-tag :type="autoStatusTagType(row.status)" size="small" effect="plain">
+                {{ autoStatusText(row.status) }}
+              </el-tag>
+            </template>
+          </el-table-column>
+          <el-table-column label="人工状态" width="150">
+            <template #default="{ row }">
+              <el-tag :type="manualStatusTagType(row.manual_status)" size="small">
+                {{ manualStatusText(row.manual_status) }}
+              </el-tag>
+              <div v-if="row.close_reason" class="wx-dlq__hint">
+                {{ closeReasonText(row.close_reason) }}
+              </div>
+              <div v-else-if="row.assignee" class="wx-dlq__hint">
+                {{ row.assignee }}
+              </div>
+            </template>
+          </el-table-column>
+          <el-table-column label="重试" width="80">
+            <template #default="{ row }">
+              {{ row.attempt_count }}/{{ row.max_attempt_count }}
+            </template>
+          </el-table-column>
+          <el-table-column prop="last_error" label="最后错误" min-width="220" show-overflow-tooltip />
+          <el-table-column label="操作" width="240" fixed="right">
+            <template #default="{ row }">
+              <el-button
+                link
+                size="small"
+                :disabled="!canClaim(row)"
+                :title="claimDisabledHint(row)"
+                @click="claimDlq(row)"
+              >
+                领取
+              </el-button>
+              <el-button
+                link
+                size="small"
+                :disabled="!canReopen(row)"
+                title="只有已关闭的记录才能重开"
+                @click="reopenDlq(row)"
+              >
+                重开
+              </el-button>
+              <el-button
+                link
+                size="small"
+                type="danger"
+                :disabled="!canClose(row)"
+                :title="closeDisabledHint(row)"
+                @click="openCloseDialog(row)"
+              >
+                关闭
+              </el-button>
+            </template>
+          </el-table-column>
+        </el-table>
+
+        <div class="wx-manager__pager">
+          <el-pagination
+            layout="total, prev, pager, next"
+            :total="dlqTotal"
+            :page-size="dlqFilter.page_size"
+            :current-page="dlqFilter.page"
+            @current-change="onDlqPageChange"
+          />
+        </div>
+
+        <!-- 关闭死信：必须选一个合法原因，备注可选 -->
+        <el-dialog v-model="closeDialog" title="关闭死信记录" width="420px">
+          <div class="wx-dialog-line">
+            <span class="wx-muted">记录 ID</span>
+            <span>{{ closeForm.id }}</span>
+          </div>
+          <div class="wx-dialog-line wx-dialog-line--block">
+            <span class="wx-muted">关闭原因（必选）</span>
+            <el-select v-model="closeForm.reason" placeholder="请选择" style="width: 100%">
+              <el-option label="已丢弃：这条消息不再处理" value="discarded" />
+              <el-option label="外部已修复：问题在别处修好了" value="externally_fixed" />
+              <el-option label="预期内失败：本来就会失败，不是故障" value="expected" />
+              <el-option label="合并故障单：并入其它事件统一处理" value="merged_incident" />
+            </el-select>
+          </div>
+          <div class="wx-dialog-line wx-dialog-line--block">
+            <span class="wx-muted">备注（可选）</span>
+            <el-input
+              v-model="closeForm.remark"
+              type="textarea"
+              :rows="3"
+              placeholder="例如：已确认上游重复投递，无需补偿"
+            />
+          </div>
+          <template #footer>
+            <el-button @click="closeDialog = false">取消</el-button>
+            <el-button
+              type="danger"
+              :loading="closeSubmitting"
+              :disabled="!closeForm.reason"
+              @click="submitCloseDlq"
+            >
+              确认关闭
+            </el-button>
+          </template>
+        </el-dialog>
+      </el-tab-pane>
+    </el-tabs>
+  </section>
 </template>
 
-<script>
-// 组件脚本负责当前页面的数据状态、接口调用和用户交互逻辑。
-import { reactive, toRefs, onMounted, ref } from "vue";
+<script setup>
+import { computed, onMounted, reactive, ref } from "vue";
 import { useStore } from "vuex";
-import axios from "axios";
-import { useRouter } from "vue-router";
-import Modal from "@/components/Modal.vue";
-import { checkEmailValid } from "@/assets/js/valid.js";
-import { generateString } from "@/assets/js/random.js";
-import DisableUserModal from "@/components/DisableUserModal.vue";
-import DeleteUserModal from "@/components/DeleteUserModal.vue";
-import SetAdminModal from "@/components/SetAdminModal.vue";
-import DeleteGroupModal from "@/components/DeleteGroupModal.vue";
-import DisableGroupModal from "@/components/DisableGroupModal.vue";
-import DLQGovernanceModal from "@/components/DLQGovernanceModal.vue";
-import { ElMessage } from "element-plus";
-export default {
-  name: "Manager",
-  components: {
-    DisableUserModal,
-    DeleteUserModal,
-    SetAdminModal,
-    DeleteGroupModal,
-    DisableGroupModal,
-    DLQGovernanceModal,
-  },
-  setup() {
-    const router = useRouter();
-    const data = reactive({
-      isDisableUserModalVisible: false,
-      isDeleteUserModalVisible: false,
-      isSetAdminModalVisible: false,
-      isDeleteGroupModalVisible: false,
-      isDisableGroupModalVisible: false,
-      isDLQGovernanceModalVisible: false,
-    });
-    const showDisableUserTable = () => {
-      data.isDisableUserModalVisible = true;
-      data.isDeleteUserModalVisible = false;
-      data.isSetAdminModalVisible = false;
-      data.isDeleteGroupModalVisible = false;
-      data.isDisableGroupModalVisible = false;
-      data.isDLQGovernanceModalVisible = false;
-    };
+import { ElMessage, ElMessageBox } from "element-plus";
+import {
+  adminAbleUsers,
+  adminDeleteGroups,
+  adminDeleteUsers,
+  adminDisableUsers,
+  adminDLQClaim,
+  adminDLQClose,
+  adminDLQList,
+  adminDLQReopen,
+  adminGetGroupInfoList,
+  adminGetUserInfoList,
+  adminSetAdmin,
+  adminSetGroupsStatus,
+} from "@/api";
 
-    const showDeleteUserTable = () => {
-      data.isDeleteUserModalVisible = true;
-      data.isDisableUserModalVisible = false;
-      data.isSetAdminModalVisible = false;
-      data.isDeleteGroupModalVisible = false;
-      data.isDisableGroupModalVisible = false;
-      data.isDLQGovernanceModalVisible = false;
+const store = useStore();
+const meId = computed(() => store.state.userInfo?.uuid || "");
+
+const activeTab = ref("users");
+
+/* ---------------- 用户 ---------------- */
+
+const users = ref([]);
+const loadingUsers = ref(false);
+const userKeyword = ref("");
+
+const filteredUsers = computed(() => {
+  const key = userKeyword.value.trim().toLowerCase();
+  if (!key) return users.value;
+  return users.value.filter((item) =>
+    [item.nickname, item.telephone, item.uuid]
+      .filter(Boolean)
+      .some((value) => String(value).toLowerCase().includes(key))
+  );
+});
+
+const loadUsers = async () => {
+  loadingUsers.value = true;
+  try {
+    const result = await adminGetUserInfoList(meId.value);
+    if (!result.ok) {
+      ElMessage.error(result.message || "加载用户失败");
+      return;
     }
-
-    const showSetAdminTable = () => {
-      data.isSetAdminModalVisible = true;
-      data.isDeleteUserModalVisible = false;
-      data.isDisableUserModalVisible = false;
-      data.isDeleteGroupModalVisible = false;
-      data.isDisableGroupModalVisible = false;
-      data.isDLQGovernanceModalVisible = false;
-    }
-
-    const showDeleteGroupTable = () => {
-      data.isSetAdminModalVisible = false;
-      data.isDeleteUserModalVisible = false;
-      data.isDisableUserModalVisible = false;
-      data.isDeleteGroupModalVisible = true;
-      data.isDisableGroupModalVisible = false;
-      data.isDLQGovernanceModalVisible = false;
-    };
-
-    const showDisableGroupTable = () => {
-      data.isSetAdminModalVisible = false;
-      data.isDeleteUserModalVisible = false;
-      data.isDisableUserModalVisible = false;
-      data.isDeleteGroupModalVisible = false;
-      data.isDisableGroupModalVisible = true;
-      data.isDLQGovernanceModalVisible = false;
-    };
-
-    const showDLQGovernanceTable = () => {
-      data.isSetAdminModalVisible = false;
-      data.isDeleteUserModalVisible = false;
-      data.isDisableUserModalVisible = false;
-      data.isDeleteGroupModalVisible = false;
-      data.isDisableGroupModalVisible = false;
-      data.isDLQGovernanceModalVisible = true;
-    };
-
-    const backToChat = () => {
-      router.push("/chat/sessionlist");
-    }
-
-    return {
-      ...toRefs(data),
-      router,
-      showDisableUserTable,
-      showDeleteUserTable,
-      showSetAdminTable,
-      showDeleteGroupTable,
-      showDisableGroupTable,
-      showDLQGovernanceTable,
-      backToChat,
-    };
-  },
+    users.value = Array.isArray(result.data) ? result.data : [];
+  } finally {
+    loadingUsers.value = false;
+  }
 };
+
+const toggleUserStatus = async (row) => {
+  const disable = Number(row.status) === 0;
+  const result = disable
+    ? await adminDisableUsers([row.uuid])
+    : await adminAbleUsers([row.uuid]);
+  if (!result.ok) {
+    ElMessage.error(result.message || "操作失败");
+    return;
+  }
+  ElMessage.success(disable ? "已禁用" : "已启用");
+  await loadUsers();
+};
+
+const toggleAdmin = async (row) => {
+  const next = Number(row.is_admin) === 1 ? 0 : 1;
+  const result = await adminSetAdmin([row.uuid], next);
+  if (!result.ok) {
+    ElMessage.error(result.message || "操作失败");
+    return;
+  }
+  ElMessage.success(next === 1 ? "已设为管理员" : "已取消管理员");
+  await loadUsers();
+};
+
+const removeUser = async (row) => {
+  try {
+    await ElMessageBox.confirm(`删除用户「${row.nickname || row.uuid}」？`, "删除用户", {
+      confirmButtonText: "删除",
+      cancelButtonText: "取消",
+      type: "warning",
+    });
+  } catch (error) {
+    return;
+  }
+  const result = await adminDeleteUsers([row.uuid]);
+  if (!result.ok) {
+    ElMessage.error(result.message || "删除失败");
+    return;
+  }
+  ElMessage.success("已删除");
+  await loadUsers();
+};
+
+/* ---------------- 群聊 ---------------- */
+
+const groups = ref([]);
+const loadingGroups = ref(false);
+
+const groupStatusText = (status) => {
+  switch (Number(status)) {
+    case 0:
+      return "正常";
+    case 1:
+      return "已停用";
+    default:
+      return "已解散";
+  }
+};
+
+const loadGroups = async () => {
+  loadingGroups.value = true;
+  try {
+    const result = await adminGetGroupInfoList();
+    if (!result.ok) {
+      ElMessage.error(result.message || "加载群聊失败");
+      return;
+    }
+    groups.value = Array.isArray(result.data) ? result.data : [];
+  } finally {
+    loadingGroups.value = false;
+  }
+};
+
+const toggleGroupStatus = async (row) => {
+  const next = Number(row.status) === 0 ? 1 : 0;
+  const result = await adminSetGroupsStatus([row.uuid], next);
+  if (!result.ok) {
+    ElMessage.error(result.message || "操作失败");
+    return;
+  }
+  ElMessage.success(next === 1 ? "已停用" : "已启用");
+  await loadGroups();
+};
+
+const removeGroup = async (row) => {
+  try {
+    await ElMessageBox.confirm(`删除群聊「${row.name || row.uuid}」？`, "删除群聊", {
+      confirmButtonText: "删除",
+      cancelButtonText: "取消",
+      type: "warning",
+    });
+  } catch (error) {
+    return;
+  }
+  const result = await adminDeleteGroups([row.uuid]);
+  if (!result.ok) {
+    ElMessage.error(result.message || "删除失败");
+    return;
+  }
+  ElMessage.success("已删除");
+  await loadGroups();
+};
+
+/* ---------------- 死信 ---------------- */
+
+const dlqList = ref([]);
+const dlqTotal = ref(0);
+const loadingDlq = ref(false);
+const dlqFilter = reactive({
+  message_id: "",
+  stage: "",
+  status: "",
+  page: 1,
+  page_size: 20,
+});
+
+/* DLQ 有两套状态：status 是自动治理，manual_status 是人工治理，要分开显示 */
+const autoStatusText = (status) => {
+  switch (String(status)) {
+    case "pending":
+      return "待重试";
+    case "retrying":
+      return "重试中";
+    case "done":
+      return "已完成";
+    case "manual":
+      return "转人工";
+    default:
+      return String(status || "-");
+  }
+};
+
+const autoStatusTagType = (status) => {
+  switch (String(status)) {
+    case "done":
+      return "success";
+    case "manual":
+      return "warning";
+    case "retrying":
+      return "primary";
+    default:
+      return "info";
+  }
+};
+
+const manualStatusText = (manualStatus) => {
+  switch (String(manualStatus)) {
+    case "open":
+      return "待处理";
+    case "in_progress":
+      return "处理中";
+    case "closed":
+      return "已关闭";
+    default:
+      return String(manualStatus || "-");
+  }
+};
+
+const manualStatusTagType = (manualStatus) => {
+  switch (String(manualStatus)) {
+    case "open":
+      return "warning";
+    case "in_progress":
+      return "primary";
+    case "closed":
+      return "info";
+    default:
+      return "info";
+  }
+};
+
+const closeReasonText = (reason) => {
+  switch (String(reason)) {
+    case "discarded":
+      return "原因：已丢弃";
+    case "externally_fixed":
+      return "原因：外部已修复";
+    case "expected":
+      return "原因：预期内失败";
+    case "merged_incident":
+      return "原因：合并故障单";
+    default:
+      return String(reason || "");
+  }
+};
+
+const loadDlq = async () => {
+  loadingDlq.value = true;
+  try {
+    const result = await adminDLQList({
+      message_id: dlqFilter.message_id.trim(),
+      stage: dlqFilter.stage.trim(),
+      status: dlqFilter.status || "",
+      page: dlqFilter.page,
+      page_size: dlqFilter.page_size,
+    });
+    if (!result.ok) {
+      ElMessage.error(result.message || "加载死信失败");
+      return;
+    }
+    dlqList.value = Array.isArray(result.data?.list) ? result.data.list : [];
+    dlqTotal.value = Number(result.data?.total || 0);
+  } finally {
+    loadingDlq.value = false;
+  }
+};
+
+const onDlqPageChange = (page) => {
+  dlqFilter.page = page;
+  loadDlq();
+};
+
+const claimDlq = async (row) => {
+  const result = await adminDLQClaim(row.id);
+  if (!result.ok) {
+    ElMessage.error(result.message || "领取失败");
+    return;
+  }
+  ElMessage.success("已领取");
+  await loadDlq();
+};
+
+const reopenDlq = async (row) => {
+  const result = await adminDLQReopen(row.id);
+  if (!result.ok) {
+    ElMessage.error(result.message || "重开失败");
+    return;
+  }
+  ElMessage.success("已重开");
+  await loadDlq();
+};
+
+/* 三个动作各有前置条件，前端按同样规则置灰，避免点了才报错 */
+const isManualPool = (row) => String(row.status) === "manual";
+const isClosed = (row) => String(row.manual_status) === "closed";
+
+const canClaim = (row) => isManualPool(row) && !isClosed(row);
+const canReopen = (row) => isManualPool(row) && isClosed(row);
+const canClose = (row) => isManualPool(row) && !isClosed(row);
+
+const claimDisabledHint = (row) => {
+  if (!isManualPool(row)) return "仍处于自动治理流程，不能被人工接手";
+  if (isClosed(row)) return "已关闭，请先重开";
+  return "认领这条记录，标记为处理中";
+};
+
+const closeDisabledHint = (row) => {
+  if (!isManualPool(row)) return "仍处于自动治理流程，无需人工关闭";
+  if (isClosed(row)) return "已经关闭过了";
+  return "人工给出终态结论";
+};
+
+const closeDialog = ref(false);
+const closeSubmitting = ref(false);
+const closeForm = reactive({ id: 0, reason: "", remark: "" });
+
+const openCloseDialog = (row) => {
+  closeForm.id = row.id;
+  closeForm.reason = "";
+  closeForm.remark = "";
+  closeDialog.value = true;
+};
+
+const submitCloseDlq = async () => {
+  if (!closeForm.reason) {
+    ElMessage.warning("请选择关闭原因");
+    return;
+  }
+  closeSubmitting.value = true;
+  try {
+    const result = await adminDLQClose(
+      closeForm.id,
+      closeForm.reason,
+      closeForm.remark.trim()
+    );
+    if (!result.ok) {
+      ElMessage.error(result.message || "关闭失败");
+      return;
+    }
+    ElMessage.success("已关闭");
+    closeDialog.value = false;
+    await loadDlq();
+  } finally {
+    closeSubmitting.value = false;
+  }
+};
+
+/* ---------------- 生命周期 ---------------- */
+
+const onTabChange = (name) => {
+  if (name === "users" && !users.value.length) loadUsers();
+  if (name === "groups" && !groups.value.length) loadGroups();
+  if (name === "dlq" && !dlqList.value.length) loadDlq();
+};
+
+onMounted(loadUsers);
 </script>
 
 <style scoped>
-.header-container {
-  height: 70px;
-  border-bottom: 3px solid #ccc;
-  background-color: rgb(252, 210.9, 210.9);
-  border-top-right-radius: 30px;
-  border-top-left-radius: 30px;
+.wx-manager__tabs {
+  padding: 0 16px 16px;
+  height: 100%;
+  overflow: auto;
+}
+.wx-manager__toolbar {
   display: flex;
-  flex-direction: row;
-  justify-content: space-between;
   align-items: center;
+  gap: 10px;
+  margin-bottom: 12px;
+  flex-wrap: wrap;
 }
-
-.el-menu {
-  width: 196px;
-  background-color: rgb(252, 210.9, 210.9);
-}
-
-.el-menu-item {
-  font-family: Arial, Helvetica, sans-serif;
-}
-
-.manager-aside-container {
-  width: 200px;
-  border-right: 3px solid #ccc;
+.wx-manager__pager {
   display: flex;
+  justify-content: flex-end;
+  margin-top: 12px;
+}
+.wx-dialog-line {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  font-size: 13.5px;
+  margin-bottom: 14px;
+}
+.wx-dialog-line--block {
   flex-direction: column;
-  border-bottom-left-radius: 30px;
+  align-items: stretch;
+  gap: 6px;
 }
-
-.header-icon {
-  height: 40px;
-  width: 40px;
-  margin-right: 20px;
+.wx-dlq__hint {
+  margin-top: 3px;
+  font-size: 11px;
+  color: var(--wx-text-3);
+  line-height: 1.4;
 }
-
-.header-title {
-  font-family: Arial, Helvetica, sans-serif;
-  font-weight: bold;
-  color: rgb(37, 37, 37);
-  font-size: 30px;
-}
-
-.user-manager-icon {
-  height: 20px;
-  width: 20px;
-}
-
-.manager-user-title {
-  font-family: Arial, Helvetica, sans-serif;
-  color: rgb(37, 37, 37);
-}
-
-.manager-user-icon {
-  height: 20px;
-  width: 20px;
-  margin-right: 10px;
-}
-
-.manager-group-title {
-  font-family: Arial, Helvetica, sans-serif;
-  color: rgb(37, 37, 37);
-}
-
-.manager-group-icon {
-  height: 20px;
-  width: 20px;
-  margin-right: 10px;
-}
-
-.menu-item-icon {
-  height: 20px;
-  width: 20px;
-  margin-right: 10px;
-}
-
 </style>

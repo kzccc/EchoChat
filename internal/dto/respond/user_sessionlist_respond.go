@@ -10,4 +10,6 @@ type UserSessionListRespond struct {
 	UserId string `json:"user_id"`
 	// Username 保存响应中的 `user_name` 字段。
 	Username string `json:"user_name"`
+	// UnreadCount 保存当前用户在该会话中的未读消息数。
+	UnreadCount int64 `json:"unread_count"`
 }

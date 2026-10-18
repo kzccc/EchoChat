@@ -1,396 +1,255 @@
 <template>
-  <!-- 个人中心页面负责展示并编辑当前登录用户的资料。 -->
-  <div class="chat-wrap">
-    <div
-      class="chat-window"
-      :style="{
-        boxShadow: `var(${'--el-box-shadow-dark'})`,
-      }"
-    >
-      <el-container class="chat-window-container">
-        <el-aside class="aside-container">
-          <NavigationModal></NavigationModal>
-          <ContactListModal></ContactListModal>
-        </el-aside>
-        <div class="owner-info-window">
-          <div class="my-homepage-title"><h2>我的主页</h2></div>
+  <section class="wx-page">
+    <div class="wx-page__header">我的</div>
 
-          <p class="owner-prefix">用户id：{{ userInfo.uuid }}</p>
-          <p class="owner-prefix">昵称：{{ userInfo.nickname }}</p>
-          <p class="owner-prefix">电话：{{ userInfo.telephone }}</p>
-          <p class="owner-prefix">邮箱：{{ userInfo.email }}</p>
-          <p class="owner-prefix">
-            性别：{{ userInfo.gender === 0 ? "男" : "女" }}
-          </p>
-          <p class="owner-prefix">生日：{{ userInfo.birthday }}</p>
-          <p class="owner-prefix">个性签名：{{ userInfo.signature }}</p>
-          <p class="owner-prefix">
-            加入EchoChat server的时间：{{ userInfo.created_at }}
-          </p>
-          <div class="owner-opt">
-            <p class="owner-prefix">头像：</p>
-            <img style="width: 40px; height: 40px" :src="userInfo.avatar" />
-          </div>
+    <div class="wx-profile">
+      <div class="wx-profile__avatar" @click="pickAvatar">
+        <wx-avatar :name="nickname" :src="avatar" :size="64" />
+        <div class="wx-profile__avatar-mask">更换</div>
+      </div>
+      <div>
+        <div class="wx-profile__name">{{ nickname || "未设置昵称" }}</div>
+        <div class="wx-profile__meta">
+          {{ userInfo.telephone || "未绑定手机号" }}
+          <span v-if="isAdmin"> · 管理员</span>
         </div>
-        <div class="edit-window">
-          <el-button class="edit-btn" @click="showMyInfoModal">编辑</el-button>
-        </div>
-        <Modal :isVisible="isMyInfoModalVisible">
-          <template v-slot:header>
-            <div class="modal-header">
-              <div class="modal-quit-btn-container">
-                <button class="modal-quit-btn" @click="quitMyInfoModal">
-                  <el-icon><Close /></el-icon>
-                </button>
-              </div>
-              <div class="modal-header-title">
-                <h3>修改主页</h3>
-              </div>
-            </div>
-          </template>
-          <template v-slot:body>
-            <el-scrollbar
-              max-height="300px"
-              style="
-                width: 400px;
-                display: flex;
-                align-items: center;
-                justify-content: center;
-                margin-top: 20px;
-              "
-            >
-              <div class="modal-body">
-                <el-form ref="formRef" :model="updateInfo" label-width="70px">
-                  <el-form-item
-                    prop="nickname"
-                    label="昵称"
-                    :rules="[
-                      {
-                        min: 3,
-                        max: 10,
-                        message: '昵称长度在 3 到 10 个字符',
-                        trigger: 'blur',
-                      },
-                    ]"
-                  >
-                    <el-input
-                      v-model="updateInfo.nickname"
-                      placeholder="选填"
-                    />
-                  </el-form-item>
-                  <el-form-item prop="email" label="邮箱">
-                    <el-input v-model="updateInfo.email" placeholder="选填" />
-                  </el-form-item>
-                  <el-form-item prop="birthday" label="生日">
-                    <el-input
-                      v-model="updateInfo.birthday"
-                      placeholder="选填，格式为2024.1.1"
-                    />
-                  </el-form-item>
-                  <el-form-item prop="signature" label="个性签名">
-                    <el-input
-                      v-model="updateInfo.signature"
-                      placeholder="选填"
-                    />
-                  </el-form-item>
-                  <el-form-item prop="avatar" label="头像">
-                    <el-upload
-                      v-model:file-list="fileList"
-                      ref="uploadRef"
-                      :auto-upload="false"
-                      :action="uploadPath"
-                      :headers="uploadHeaders"
-                      :on-success="handleUploadSuccess"
-                      :before-upload="beforeFileUpload"
-                    >
-                      <template #trigger>
-                        <el-button
-                          style="background-color: rgb(252, 210.9, 210.9)"
-                          >上传图片</el-button
-                        >
-                      </template>
-                    </el-upload>
-                  </el-form-item>
-                </el-form>
-              </div>
-            </el-scrollbar>
-          </template>
-          <template v-slot:footer>
-            <div class="modal-footer">
-              <el-button class="modal-close-btn" @click="closeMyInfoModal">
-                完成
-              </el-button>
-            </div>
-          </template>
-        </Modal>
-      </el-container>
+      </div>
     </div>
-  </div>
+
+    <div class="wx-card">
+      <div class="wx-card__title">个人资料</div>
+
+      <div class="wx-field">
+        <span class="wx-field__label">昵称</span>
+        <div class="wx-field__value">
+          <el-input v-model="form.nickname" placeholder="昵称" />
+        </div>
+      </div>
+
+      <div class="wx-field">
+        <span class="wx-field__label">邮箱</span>
+        <div class="wx-field__value">
+          <el-input v-model="form.email" placeholder="邮箱" />
+        </div>
+      </div>
+
+      <div class="wx-field">
+        <span class="wx-field__label">生日</span>
+        <div class="wx-field__value">
+          <el-date-picker
+            v-model="form.birthday"
+            type="date"
+            value-format="YYYY-MM-DD"
+            placeholder="选择日期"
+            style="width: 100%"
+          />
+        </div>
+      </div>
+
+      <div class="wx-field">
+        <span class="wx-field__label">签名</span>
+        <div class="wx-field__value">
+          <el-input
+            v-model="form.signature"
+            type="textarea"
+            :rows="2"
+            maxlength="60"
+            show-word-limit
+            placeholder="一句话介绍自己"
+          />
+        </div>
+      </div>
+
+      <el-button
+        type="primary"
+        style="width: 100%; margin-top: 18px"
+        :loading="saving"
+        @click="save"
+      >
+        保存
+      </el-button>
+    </div>
+
+    <div class="wx-card">
+      <div class="wx-card__title">账号</div>
+      <div class="wx-field">
+        <span class="wx-field__label">用户 ID</span>
+        <span class="wx-field__value wx-ellipsis">{{ userInfo.uuid || "-" }}</span>
+        <el-button link size="small" @click="copyId">复制</el-button>
+      </div>
+      <div class="wx-field">
+        <span class="wx-field__label">注册时间</span>
+        <span class="wx-field__value">{{ userInfo.created_at || "-" }}</span>
+      </div>
+      <el-button
+        v-if="isAdmin"
+        style="width: 100%; margin-top: 14px"
+        @click="goManager"
+      >
+        进入后台管理
+      </el-button>
+      <el-button
+        type="danger"
+        plain
+        style="width: 100%; margin: 10px 0 0"
+        @click="handleLogout"
+      >
+        退出登录
+      </el-button>
+    </div>
+
+    <input
+      ref="avatarInputRef"
+      type="file"
+      accept="image/*"
+      style="display: none"
+      @change="onAvatarPicked"
+    />
+  </section>
 </template>
 
-<script>
-// 组件脚本负责当前页面的数据状态、接口调用和用户交互逻辑。
-import { computed, reactive, toRefs, onMounted, ref } from "vue";
-import { useStore } from "vuex";
-import axios from "axios";
+<script setup>
+import { computed, onMounted, reactive, ref } from "vue";
 import { useRouter } from "vue-router";
-import Modal from "@/components/Modal.vue";
-import { checkEmailValid } from "@/assets/js/valid.js";
-import { generateString } from "@/assets/js/random.js";
-import SmallModal from "@/components/SmallModal.vue";
-import NavigationModal from "@/components/NavigationModal.vue";
-import ContactListModal from "@/components/ContactListModal.vue";
+import { useStore } from "vuex";
 import { ElMessage } from "element-plus";
-export default {
-  name: "OwnInfo",
-  components: {
-    Modal,
-    SmallModal,
-    ContactListModal,
-    NavigationModal,
-  },
-  setup() {
-    const router = useRouter();
-    const store = useStore();
-    const uploadHeaders = computed(() =>
-      store.state.accessToken
-        ? { Authorization: "Bearer " + store.state.accessToken }
-        : {}
-    );
-    const data = reactive({
-      userInfo: store.state.userInfo,
-      updateInfo: {
-        uuid: "",
-        nickname: "",
-        email: "",
-        birthday: "",
-        signature: "",
-        avatar: "",
-      },
-      isMyInfoModalVisible: false,
-      ownListReq: {
-        owner_id: "",
-      },
-      uploadRef: null,
-      uploadPath: store.state.backendUrl + "/message/uploadAvatar",
-      fileList: [],
-      cnt: 0,
-    });
-    const showMyInfoModal = () => {
-      data.isMyInfoModalVisible = true;
-    };
-    const closeMyInfoModal = async () => {
-      console.log(data.fileList);
-      if (
-        data.updateInfo.nickname == "" &&
-        data.fileList.length == 0 &&
-        data.updateInfo.email == "" &&
-        data.updateInfo.birthday == "" &&
-        data.updateInfo.signature == ""
-      ) {
-        ElMessage("请至少修改一项");
-        return;
-      }
-      if (data.updateInfo.nickname != "") {
-        if (
-          data.updateInfo.nickname.length < 3 ||
-          data.updateInfo.nickname.length > 10
-        ) {
-          return;
-        }
-      }
-      if (data.updateInfo.email != "") {
-        if (!checkEmailValid(data.updateInfo.email)) {
-          ElMessage("请输入有效的邮箱。");
-          return;
-        }
-      }
-      if (data.updateInfo.nickname != "") {
-        data.userInfo.nickname = data.updateInfo.nickname;
-      }
-      if (data.updateInfo.email != "") {
-        data.userInfo.email = data.updateInfo.email;
-      }
-      if (data.fileList.length != 0) {
-        try {
-          data.updateInfo.avatar = "/static/avatars/" + data.fileList[0].name;
-          console.log(data.updateInfo.avatar);
-          data.userInfo.avatar = store.state.backendUrl + data.updateInfo.avatar;
-          store.commit("setUserInfo", data.userInfo);
-          data.uploadRef.submit();
-        } catch (error) {
-          console.log(error);
-        }
-      }
+import WxAvatar from "@/components/WxAvatar.vue";
+import { updateUserInfo, uploadAvatar } from "@/api";
+import { logoutSession, normalizeUserInfo } from "@/utils/session";
 
-      if (data.updateInfo.birthday != "") {
-        data.userInfo.birthday = data.updateInfo.birthday;
-      }
-      if (data.updateInfo.signature != "") {
-        data.userInfo.signature = data.updateInfo.signature;
-      }
-      data.isMyInfoModalVisible = false;
-      data.fileList = [];
-      data.cnt = 0;
-      data.updateInfo.uuid = data.userInfo.uuid;
-      store.commit("setUserInfo", data.userInfo);
-      try {
-        const rsp = await axios.post(
-          store.state.backendUrl + "/user/updateUserInfo",
-          data.updateInfo
-        );
-        console.log(rsp);
-        if (rsp.data.code == 200) {
-          ElMessage.success(rsp.data.message);
-        } else if (rsp.data.code == 400) {
-          ElMessage.error(rsp.data.message);
-        } else if (rsp.data.code == 500) {
-          ElMessage.error(rsp.data.message);
-        }
-      } catch (error) {
-        console.log(error);
-      }
-      router.go(0);
-    };
-    const quitMyInfoModal = () => {
-      data.isMyInfoModalVisible = false;
-      data.fileList = [];
-      data.cnt = 0;
-    };
-    const handleUploadSuccess = () => {
-      ElMessage.success("头像上传成功");
-      data.fileList = [];
-    };
-    const beforeFileUpload = (file) => {
-      console.log("上传前file====>", file);
-      console.log(data.fileList);
-      console.log(file);
-      if (data.fileList.length > 1) {
-        ElMessage.error("只能上传一张头像");
-        return false;
-      }
-      const isLt50M = file.size / 1024 / 1024 < 50;
-      if (!isLt50M) {
-        ElMessage.error("上传头像图片大小不能超过 50MB!");
-        return false;
-      }
-    };
-    const getFileExtension = (filename) => {
-      const parts = filename.split(".");
-      return parts.length > 1 ? parts.pop() : "";
-    };
+const store = useStore();
+const router = useRouter();
 
-    
-    return {
-      ...toRefs(data),
-      uploadHeaders,
-      router,
-      showMyInfoModal,
-      closeMyInfoModal,
-      quitMyInfoModal,
-      handleUploadSuccess,
-      beforeFileUpload,
-    };
-  },
+const saving = ref(false);
+const avatarInputRef = ref(null);
+
+const userInfo = computed(() => store.state.userInfo || {});
+const nickname = computed(() => userInfo.value.nickname || "");
+const avatar = computed(() => userInfo.value.avatar || "");
+const isAdmin = computed(() => Number(userInfo.value.is_admin) === 1);
+
+const form = reactive({
+  nickname: "",
+  email: "",
+  birthday: "",
+  signature: "",
+});
+
+const fillForm = () => {
+  form.nickname = userInfo.value.nickname || "";
+  form.email = userInfo.value.email || "";
+  form.birthday = userInfo.value.birthday || "";
+  form.signature = userInfo.value.signature || "";
 };
+
+const save = async () => {
+  if (!userInfo.value.uuid) return;
+  if (!form.nickname.trim()) {
+    ElMessage.warning("昵称不能为空");
+    return;
+  }
+  saving.value = true;
+  try {
+    const result = await updateUserInfo({
+      uuid: userInfo.value.uuid,
+      nickname: form.nickname.trim(),
+      email: form.email.trim(),
+      birthday: form.birthday || "",
+      signature: form.signature.trim(),
+      avatar: userInfo.value.avatar || "",
+    });
+    if (!result.ok) {
+      ElMessage.error(result.message || "保存失败");
+      return;
+    }
+    store.commit(
+      "setUserInfo",
+      normalizeUserInfo(store, {
+        ...userInfo.value,
+        nickname: form.nickname.trim(),
+        email: form.email.trim(),
+        birthday: form.birthday || "",
+        signature: form.signature.trim(),
+      })
+    );
+    ElMessage.success("已保存");
+  } finally {
+    saving.value = false;
+  }
+};
+
+const pickAvatar = () => avatarInputRef.value?.click();
+
+const onAvatarPicked = async (event) => {
+  const file = event.target.files?.[0];
+  event.target.value = "";
+  if (!file) return;
+  ElMessage.info("正在上传头像…");
+  const uploaded = await uploadAvatar(file);
+  if (!uploaded.ok) {
+    ElMessage.error(uploaded.message || "上传失败");
+    return;
+  }
+  // 后端按原始文件名保存到静态头像目录，这里拼出可访问路径再写回资料。
+  const path = `/static/avatars/${file.name}`;
+  const result = await updateUserInfo({
+    uuid: userInfo.value.uuid,
+    nickname: form.nickname.trim() || userInfo.value.nickname || "",
+    email: form.email.trim(),
+    birthday: form.birthday || "",
+    signature: form.signature.trim(),
+    avatar: path,
+  });
+  if (!result.ok) {
+    ElMessage.error(result.message || "头像保存失败");
+    return;
+  }
+  store.commit(
+    "setUserInfo",
+    normalizeUserInfo(store, { ...userInfo.value, avatar: path })
+  );
+  ElMessage.success("头像已更新");
+};
+
+const copyId = async () => {
+  try {
+    await navigator.clipboard.writeText(userInfo.value.uuid || "");
+    ElMessage.success("已复制用户 ID");
+  } catch (error) {
+    ElMessage.warning("当前浏览器不允许自动复制，请手动选择");
+  }
+};
+
+const goManager = () => router.push("/manager");
+
+const handleLogout = async () => {
+  await logoutSession(store);
+  router.push("/login");
+};
+
+onMounted(fillForm);
 </script>
 
 <style scoped>
-.owner-info-window {
-  width: 84%;
-  height: 100%;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-}
-
-.owner-prefix {
-  font-family: Arial, Helvetica, sans-serif;
-  margin: 6px;
-}
-
-.owner-opt {
-  margin: 6px;
-  display: flex;
-  flex-direction: row;
-}
-
-.edit-window {
-  width: 10%;
-  display: flex;
-  flex-direction: column-reverse;
-}
-
-h3 {
-  font-family: Arial, Helvetica, sans-serif;
-  color: rgb(69, 69, 68);
-}
-
-.modal-quit-btn-container {
-  height: 30%;
-  width: 100%;
-  display: flex;
-  flex-direction: row-reverse;
-}
-
-.modal-quit-btn {
-  background-color: rgba(255, 255, 255, 0);
-  color: rgb(229, 25, 25);
-  padding: 15px;
-  border: none;
+.wx-profile__avatar {
+  position: relative;
   cursor: pointer;
-  position: fixed;
-  justify-content: center;
-  align-items: center;
+  border-radius: var(--wx-radius);
+  overflow: hidden;
 }
-
-.modal-header {
-  height: 20%;
-  width: 100%;
+.wx-profile__avatar-mask {
+  position: absolute;
+  inset: 0;
   display: flex;
-  flex-direction: column;
-  justify-content: center;
-  align-items: center;
-}
-
-.modal-body {
-  height: 100%;
-  width: 100%;
-  display: flex;
-  flex-direction: column;
   align-items: center;
   justify-content: center;
+  background: rgba(0, 0, 0, 0.45);
+  color: #fff;
+  font-size: 12px;
+  opacity: 0;
+  transition: opacity 0.15s;
 }
-
-.modal-footer {
-  height: 20%;
-  width: 100%;
-  display: flex;
-  justify-content: center;
-  align-items: center;
-}
-
-.modal-header-title {
-  height: 70%;
-  width: 100%;
-  display: flex;
-  justify-content: center;
-  align-items: center;
-}
-
-h2 {
-  margin-bottom: 20px;
-  font-family: Arial, Helvetica, sans-serif;
-}
-
-.el-menu {
-  background-color: rgb(252, 210.9, 210.9);
-  width: 101%;
-}
-
-.el-menu-item {
-  background-color: rgb(255, 255, 255);
-  height: 45px;
+.wx-profile__avatar:hover .wx-profile__avatar-mask {
+  opacity: 1;
 }
 </style>

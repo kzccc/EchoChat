@@ -57,6 +57,27 @@ func registerObservabilityRoutes(engine *gin.Engine) {
 			}
 			c.JSON(http.StatusOK, gin.H{"code": 200, "msg": "ok"})
 		})
+		engine.POST("/bench/admin/session_seq/warm_state", func(c *gin.Context) {
+			type requestBody struct {
+				ConversationKeys []string `json:"conversation_keys"`
+				Floor            int64    `json:"floor"`
+			}
+			var req requestBody
+			if err := c.ShouldBindJSON(&req); err != nil {
+				c.JSON(http.StatusBadRequest, gin.H{"code": 400, "msg": err.Error()})
+				return
+			}
+			if len(req.ConversationKeys) == 0 {
+				c.JSON(http.StatusBadRequest, gin.H{"code": 400, "msg": "conversation_keys is required"})
+				return
+			}
+			warmed, err := chat.WarmConversationSequenceBenchState(req.ConversationKeys, req.Floor)
+			if err != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "msg": err.Error()})
+				return
+			}
+			c.JSON(http.StatusOK, gin.H{"code": 200, "msg": "ok", "data": gin.H{"warmed": warmed}})
+		})
 		engine.POST("/bench/admin/session_seq/redis_key/delete", func(c *gin.Context) {
 			type requestBody struct {
 				ConversationKey string `json:"conversation_key"`

@@ -154,6 +154,7 @@ func (s *Server) Start() {
 					)
 					continue
 				}
+				ensureServerMessageID(&chatMessageReq)
 				// log.Println("原消息为：", data, "反序列化后为：", chatMessageReq)
 				//? 这里判断消息类型，如果是文本消息，则落库
 				if chatMessageReq.Type == message_type_enum.Text {
@@ -189,7 +190,7 @@ func (s *Server) Start() {
 					message.SendAvatar = normalizePath(message.SendAvatar)
 					if res := dao.GormDB.Create(&message); res.Error != nil {
 						zlog.Error(res.Error.Error())
-						clearIngressIdempotencyPending(message.SendId, message.Uuid)
+						clearIngressIdempotencyPending(message.SendId, chatMessageReq.ClientMsgID)
 						continue
 					}
 					logMessagePersist("channel", &message)
@@ -220,8 +221,9 @@ func (s *Server) Start() {
 						logMessageDispatch("channel", "user", &message, len(jsonMessage))
 						//? 构造messageBack, 放入client.SendBack准备发送给接收方
 						var messageBack = &MessageBack{
-							Message: jsonMessage, //这个就是[]byte,序列化后的响应体
-							Uuid:    message.Uuid,
+							Message:         jsonMessage, //这个就是[]byte,序列化后的响应体
+							Uuid:            message.Uuid,
+							ConversationKey: message.ConversationKey,
 						}
 						//? 如果对方在线的话就将messageback放进client.SendBack
 						s.mutex.Lock()
@@ -237,9 +239,10 @@ func (s *Server) Start() {
 
 						//? 如果双方的聊天记录缓存已存在，则顺手把新消息追加进去。
 						// 尝试从 Redis 中获取当前双方（发送方与接收方）的私聊消息列表缓存。
-						// 缓存键格式为：message_list_{SendId}_{ReceiveId}
+						// 缓存键格式为：message_list_{conversationKey}
 						var rspString string
-						rspString, err = myredis.GetKeyNilIsErr("message_list_" + message.SendId + "_" + message.ReceiveId)
+						cacheKey := userMessageListCacheKey(message.SendId, message.ReceiveId, message.ConversationKey)
+						rspString, err = myredis.GetKeyNilIsErr(cacheKey)
 
 						if err == nil {
 							// 如果缓存存在（err == nil），则将其反序列化为消息响应体切片。
@@ -248,20 +251,14 @@ func (s *Server) Start() {
 								zlog.Error(err.Error()) // 反序列化失败，记录错误日志
 							}
 
-							rsp, _ = appendUniqueUserCacheMessage("message_list_"+message.SendId+"_"+message.ReceiveId, rsp, messageRsp, "channel")
-
-							// 将更新后的消息列表重新序列化为 JSON 字符串。
-							rspByte, err := json.Marshal(rsp)
-							if err != nil {
-								zlog.Error(err.Error()) // 序列化失败，记录错误日志
-							}
+							rsp, _ = appendUniqueUserCacheMessage(cacheKey, rsp, messageRsp, "channel")
 
 							// 将更新后的消息列表写回 Redis，设置过期时间（REDIS_TIMEOUT 分钟），
 							// 确保缓存不会无限增长，并在一段时间无交互后自动清理。
-							if err := myredis.SetKeyEx("message_list_"+message.SendId+"_"+message.ReceiveId, string(rspByte), time.Minute*constants.REDIS_TIMEOUT); err != nil {
+							if err := setMessageListHotCache(cacheKey, rsp); err != nil {
 								zlog.Error(err.Error()) // 写入 Redis 失败，记录错误日志
 							} else {
-								logMessageCacheUpdate("channel", "message_list_"+message.SendId+"_"+message.ReceiveId, len(rsp))
+								logMessageCacheUpdate("channel", cacheKey, len(rsp))
 							}
 						} else {
 							// 如果缓存不存在（即返回 redis.Nil），属于正常情况，无需处理。
@@ -270,7 +267,7 @@ func (s *Server) Start() {
 								zlog.Error(err.Error())
 							}
 						}
-						completeIngressIdempotencyResult(message.SendId, message.Uuid, mustMarshalIngressReplayPayload(messageRsp))
+						completeIngressIdempotencyResult(message.SendId, chatMessageReq.ClientMsgID, mustMarshalIngressReplayPayload(messageRsp))
 
 					} else if message.ReceiveId[0] == 'G' { // 发送给Group
 						// 群聊场景会查出群成员，并对在线成员逐个回推。
@@ -298,8 +295,9 @@ func (s *Server) Start() {
 						logMessageDispatch("channel", "group", &message, len(jsonMessage))
 						//? 构造messageBack, 准备放入client.SendBack准备发送给接收方
 						var messageBack = &MessageBack{
-							Message: jsonMessage,
-							Uuid:    message.Uuid,
+							Message:         jsonMessage,
+							Uuid:            message.Uuid,
+							ConversationKey: message.ConversationKey,
 						}
 						//? 通过群的uuid将群成员取出来
 						var group model.GroupInfo
@@ -333,11 +331,7 @@ func (s *Server) Start() {
 								zlog.Error(err.Error())
 							}
 							rsp, _ = appendUniqueGroupCacheMessage("group_messagelist_"+message.ReceiveId, rsp, messageRsp, "channel")
-							rspByte, err := json.Marshal(rsp)
-							if err != nil {
-								zlog.Error(err.Error())
-							}
-							if err := myredis.SetKeyEx("group_messagelist_"+message.ReceiveId, string(rspByte), time.Minute*constants.REDIS_TIMEOUT); err != nil {
+							if err := setMessageListHotCache("group_messagelist_"+message.ReceiveId, rsp); err != nil {
 								zlog.Error(err.Error())
 							} else {
 								logMessageCacheUpdate("channel", "group_messagelist_"+message.ReceiveId, len(rsp))
@@ -347,7 +341,7 @@ func (s *Server) Start() {
 								zlog.Error(err.Error())
 							}
 						}
-						completeIngressIdempotencyResult(message.SendId, message.Uuid, mustMarshalIngressReplayPayload(messageRsp))
+						completeIngressIdempotencyResult(message.SendId, chatMessageReq.ClientMsgID, mustMarshalIngressReplayPayload(messageRsp))
 					}
 				} else if chatMessageReq.Type == message_type_enum.File {
 					//? 文件消息与文本消息流程基本一致，只是展示字段换成文件信息。
@@ -382,7 +376,7 @@ func (s *Server) Start() {
 					message.SendAvatar = normalizePath(message.SendAvatar)
 					if res := dao.GormDB.Create(&message); res.Error != nil {
 						zlog.Error(res.Error.Error())
-						clearIngressIdempotencyPending(message.SendId, message.Uuid)
+						clearIngressIdempotencyPending(message.SendId, chatMessageReq.ClientMsgID)
 						continue
 					}
 					logMessagePersist("channel", &message)
@@ -412,8 +406,9 @@ func (s *Server) Start() {
 						logMessageDispatch("channel", "user", &message, len(jsonMessage))
 						//? 构造messageBack, 准备放入client.SendBack准备发送给接收方
 						var messageBack = &MessageBack{
-							Message: jsonMessage,
-							Uuid:    message.Uuid,
+							Message:         jsonMessage,
+							Uuid:            message.Uuid,
+							ConversationKey: message.ConversationKey,
 						}
 						//? 通过单聊的uuid将单聊成员取出来发送和回显
 						s.mutex.Lock()
@@ -429,28 +424,25 @@ func (s *Server) Start() {
 
 						//? 单聊文件消息同样会尝试刷新双方消息缓存。
 						var rspString string
-						rspString, err = myredis.GetKeyNilIsErr("message_list_" + message.SendId + "_" + message.ReceiveId)
+						cacheKey := userMessageListCacheKey(message.SendId, message.ReceiveId, message.ConversationKey)
+						rspString, err = myredis.GetKeyNilIsErr(cacheKey)
 						if err == nil {
 							var rsp []respond.GetMessageListRespond
 							if err := json.Unmarshal([]byte(rspString), &rsp); err != nil {
 								zlog.Error(err.Error())
 							}
-							rsp, _ = appendUniqueUserCacheMessage("message_list_"+message.SendId+"_"+message.ReceiveId, rsp, messageRsp, "channel")
-							rspByte, err := json.Marshal(rsp)
-							if err != nil {
-								zlog.Error(err.Error())
-							}
-							if err := myredis.SetKeyEx("message_list_"+message.SendId+"_"+message.ReceiveId, string(rspByte), time.Minute*constants.REDIS_TIMEOUT); err != nil {
+							rsp, _ = appendUniqueUserCacheMessage(cacheKey, rsp, messageRsp, "channel")
+							if err := setMessageListHotCache(cacheKey, rsp); err != nil {
 								zlog.Error(err.Error())
 							} else {
-								logMessageCacheUpdate("channel", "message_list_"+message.SendId+"_"+message.ReceiveId, len(rsp))
+								logMessageCacheUpdate("channel", cacheKey, len(rsp))
 							}
 						} else {
 							if !errors.Is(err, redis.Nil) {
 								zlog.Error(err.Error())
 							}
 						}
-						completeIngressIdempotencyResult(message.SendId, message.Uuid, mustMarshalIngressReplayPayload(messageRsp))
+						completeIngressIdempotencyResult(message.SendId, chatMessageReq.ClientMsgID, mustMarshalIngressReplayPayload(messageRsp))
 					} else {
 						//? 先构造群聊文件消息的响应体，这个结构是前端 messageList 真正要消费的数据格式
 						messageRsp := respond.GetGroupMessageListRespond{
@@ -479,8 +471,9 @@ func (s *Server) Start() {
 						//? 构造 messageBack，Message 字段里放的是准备通过 websocket 写回前端的序列化结果，
 						//? Uuid 则对应数据库里的消息 uuid，后面写回成功后可以据此更新消息状态
 						var messageBack = &MessageBack{
-							Message: jsonMessage,
-							Uuid:    message.Uuid,
+							Message:         jsonMessage,
+							Uuid:            message.Uuid,
+							ConversationKey: message.ConversationKey,
 						}
 
 						//? 查出当前群的成员列表，后面服务端会遍历成员，把这条群消息推送给所有在线成员
@@ -519,11 +512,7 @@ func (s *Server) Start() {
 								zlog.Error(err.Error())
 							}
 							rsp, _ = appendUniqueGroupCacheMessage("group_messagelist_"+message.ReceiveId, rsp, messageRsp, "channel")
-							rspByte, err := json.Marshal(rsp)
-							if err != nil {
-								zlog.Error(err.Error())
-							}
-							if err := myredis.SetKeyEx("group_messagelist_"+message.ReceiveId, string(rspByte), time.Minute*constants.REDIS_TIMEOUT); err != nil {
+							if err := setMessageListHotCache("group_messagelist_"+message.ReceiveId, rsp); err != nil {
 								zlog.Error(err.Error())
 							} else {
 								logMessageCacheUpdate("channel", "group_messagelist_"+message.ReceiveId, len(rsp))
@@ -533,7 +522,7 @@ func (s *Server) Start() {
 								zlog.Error(err.Error())
 							}
 						}
-						completeIngressIdempotencyResult(message.SendId, message.Uuid, mustMarshalIngressReplayPayload(messageRsp))
+						completeIngressIdempotencyResult(message.SendId, chatMessageReq.ClientMsgID, mustMarshalIngressReplayPayload(messageRsp))
 					}
 				} else if chatMessageReq.Type == message_type_enum.AudioOrVideo {
 					// 音视频消息主要承载信令数据，只有部分事件需要持久化留痕。
@@ -574,7 +563,7 @@ func (s *Server) Start() {
 						message.SendAvatar = normalizePath(message.SendAvatar)
 						if res := dao.GormDB.Create(&message); res.Error != nil {
 							zlog.Error(res.Error.Error())
-							clearIngressIdempotencyPending(message.SendId, message.Uuid)
+							clearIngressIdempotencyPending(message.SendId, chatMessageReq.ClientMsgID)
 							continue
 						}
 						logMessagePersist("channel", &message)
@@ -606,8 +595,9 @@ func (s *Server) Start() {
 						}
 						logMessageDispatch("channel", "user", &message, len(jsonMessage))
 						var messageBack = &MessageBack{
-							Message: jsonMessage,
-							Uuid:    message.Uuid,
+							Message:         jsonMessage,
+							Uuid:            message.Uuid,
+							ConversationKey: message.ConversationKey,
 						}
 						s.mutex.Lock()
 						if receiveClient, ok := s.Clients[message.ReceiveId]; ok {
@@ -617,7 +607,7 @@ func (s *Server) Start() {
 						//sendClient := s.Clients[message.SendId]
 						//sendClient.SendBack <- messageBack
 						s.mutex.Unlock()
-						completeIngressIdempotencyResult(message.SendId, message.Uuid, mustMarshalIngressReplayPayload(messageRsp))
+						completeIngressIdempotencyResult(message.SendId, chatMessageReq.ClientMsgID, mustMarshalIngressReplayPayload(messageRsp))
 					}
 				}
 

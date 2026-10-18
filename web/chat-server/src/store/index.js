@@ -18,6 +18,8 @@ export default createStore({
     userInfo: (sessionStorage.getItem('userInfo') && JSON.parse(sessionStorage.getItem('userInfo'))) || {},
     // socket 保存全局唯一的 WebSocket 连接实例，供多个页面共享。
     socket: null,
+    // unreadTotal 是左侧导航栏的未读角标，由会话列表页维护。
+    unreadTotal: 0,
   },
   getters: {
   },
@@ -75,6 +77,9 @@ export default createStore({
     },
     setSocket(state, socket) {
       state.socket = socket || null;
+    },
+    setUnreadTotal(state, total) {
+      state.unreadTotal = Number(total) || 0;
     },
     // cleanUserInfo 用于退出登录后的全局状态清理。
     cleanUserInfo(state) {

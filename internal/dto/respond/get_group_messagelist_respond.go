@@ -29,3 +29,11 @@ type GetGroupMessageListRespond struct {
 	// CreatedAt 保存响应中的 `created_at` 字段。
 	CreatedAt string `json:"created_at"`
 }
+
+// GetGroupMessageListPageRespond 描述群聊消息游标分页返回结构。
+type GetGroupMessageListPageRespond struct {
+	List          []GetGroupMessageListRespond `json:"list"`
+	NextBeforeSeq int64                        `json:"next_before_seq"`
+	HasMore       bool                         `json:"has_more"`
+	Limit         int                          `json:"limit"`
+}

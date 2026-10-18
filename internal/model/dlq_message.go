@@ -1,6 +1,11 @@
 package model
 
-import "time"
+import (
+	"encoding/json"
+	"time"
+
+	"gorm.io/gorm"
+)
 
 const (
 	DLQHandleTypeAuto   = "auto"
@@ -59,4 +64,31 @@ type DLQMessage struct {
 
 func (DLQMessage) TableName() string {
 	return "dlq_message"
+}
+
+// normalizeJSONColumn 保证写入 json 列的字符串一定合法。
+//
+// 背景：payload_snapshot / context_snapshot 在 MySQL 里是 JSON 类型列，
+// 空字符串不是合法 JSON。而调用方在"没有上下文"时会传空串，
+// 一旦写入就报 Error 3140，重放调度器每次 Save 都会失败并原地重试，
+// 形成"每 20 秒一条报错、记录永远卡在 retrying"的死循环。
+// 这里统一兜底成空对象。
+func normalizeJSONColumn(value string) string {
+	if value == "" {
+		return "{}"
+	}
+	if !json.Valid([]byte(value)) {
+		return "{}"
+	}
+	return value
+}
+
+// BeforeSave 在任意保存路径（Create / Save / 冲突更新）前把 JSON 列规整成合法 JSON。
+func (m *DLQMessage) BeforeSave(tx *gorm.DB) error {
+	if m == nil {
+		return nil
+	}
+	m.PayloadSnapshot = normalizeJSONColumn(m.PayloadSnapshot)
+	m.ContextSnapshot = normalizeJSONColumn(m.ContextSnapshot)
+	return nil
 }

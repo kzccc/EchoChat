@@ -32,13 +32,18 @@ issuer = "EchoChat"
 subject = "user-auth"
 key = "change-me-echochat-jwt-secret"
 
+[idConfig]
+snowflakeWorkerID = 0 # 多实例部署时每个实例配置不同值，范围 0-1023
+
 [kafkaConfig]
 messageMode = "channel"# 消息模式 channel or kafka
 hostPort = "127.0.0.1:9092" # "127.0.0.1:9092,127.0.0.1:9093,127.0.0.1:9094" 多个kafka服务器
 loginTopic = "login"
 chatTopic = "chat_message"
+persistTopic = "chat_message_persist" # asyncPersistEnabled=true 时使用，insert/status update 都按 conversation_key 写入同一分区
 logoutTopic = "logout"
 consumerGroup = "chat" # Kafka 消费组名，便于多实例部署时统一管理消费进度
+persistConsumerGroup = "chat_persist" # 异步落库事件消费组
 messageKey = "chat" # session_id 为空时的兜底 key；正常情况下会优先使用 session_id 作为消息 key
 topicPartitions = 3 # CreateTopic 创建 chatTopic 时使用的分区数量；学习和观察分流效果时比 1 更直观
 topicReplicationFactor = 1 # CreateTopic 创建 chatTopic 时使用的副本因子；单 broker 建议 1，多 broker 建议 3
@@ -52,6 +57,7 @@ consumerCommitIntervalMs = 250 # 消费端最长多久提交一次 offset，单�
 mysqlPersistBatchSize = 64 # mysql_persist 批量写的批次大小
 mysqlPersistFlushIntervalMs = 1 # mysql_persist 批量写的最长等待时间，单位毫秒
 mysqlPersistWorkerCount = 8 # mysql_persist 批量写 worker 数量
+asyncPersistEnabled = false # true 时主链路只可靠写入 persist topic，MySQL 落库和 sent 状态更新由 persist consumer 完成
 
 [staticSrcConfig]
 staticAvatarPath = "./static/avatars"

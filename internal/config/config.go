@@ -102,6 +102,12 @@ type JwtConfig struct {
 	Key string `toml:"key"`
 }
 
+type IDConfig struct {
+	// SnowflakeWorkerID 是雪花 ID 的实例编号，取值范围 0-1023。
+	// 多实例部署时建议显式配置不同值；未配置或配置非法时会按主机名 hash 兜底。
+	SnowflakeWorkerID *int64 `toml:"snowflakeWorkerID"`
+}
+
 type KafkaConfig struct {
 	// MessageMode 决定聊天消息走本地 channel 还是 Kafka。
 	MessageMode string `toml:"messageMode"`
@@ -113,6 +119,8 @@ type KafkaConfig struct {
 	LogoutTopic string `toml:"logoutTopic"`
 	// ChatTopic 是聊天消息主题。
 	ChatTopic string `toml:"chatTopic"`
+	// PersistTopic 是异步可靠落库事件主题。
+	PersistTopic string `toml:"persistTopic"`
 	// MessageKey 是聊天消息写入 Kafka 时的兜底 key。
 	// 当前项目会优先使用 session_id 作为消息 key；只有 session_id 为空时才回退到这里。
 	MessageKey string `toml:"messageKey"`
@@ -129,6 +137,8 @@ type KafkaConfig struct {
 	Timeout time.Duration `toml:"timeout"`
 	// ConsumerGroup 是聊天消息消费组名。
 	ConsumerGroup string `toml:"consumerGroup"`
+	// PersistConsumerGroup 是异步落库事件消费组名。
+	PersistConsumerGroup string `toml:"persistConsumerGroup"`
 	// ProducerRetryMax 是生产端发送失败后的最大重试次数。
 	ProducerRetryMax int `toml:"producerRetryMax"`
 	// ProducerRetryBackoffMs 是生产端重试退避时间，单位毫秒。
@@ -139,6 +149,28 @@ type KafkaConfig struct {
 	ConsumerCommitBatchSize int `toml:"consumerCommitBatchSize"`
 	// ConsumerCommitIntervalMs 是消费侧手动提交 offset 的时间窗口，单位毫秒。
 	ConsumerCommitIntervalMs int `toml:"consumerCommitIntervalMs"`
+	// ConsumerAsyncCommitEnabled 为 true 时，conversation bucket 消费侧把 session.Commit 放到独立 goroutine。
+	ConsumerAsyncCommitEnabled bool `toml:"consumerAsyncCommitEnabled"`
+	// ConsumerFetchDefaultBytes 是 Sarama 单次 fetch 的默认目标大小，0 表示使用 Sarama 默认值。
+	ConsumerFetchDefaultBytes int32 `toml:"consumerFetchDefaultBytes"`
+	// ConsumerFetchMaxBytes 是 Sarama 单次 fetch 的最大大小，0 表示使用 Sarama 默认值。
+	ConsumerFetchMaxBytes int32 `toml:"consumerFetchMaxBytes"`
+	// ConsumerChannelBufferSize 是 Sarama 内部 channel 缓冲条数，0 表示使用 Sarama 默认值。
+	ConsumerChannelBufferSize int `toml:"consumerChannelBufferSize"`
+	// ConsumerMaxProcessingTimeMs 是 Sarama 写入 Messages channel 的处理时间阈值，0 表示使用 Sarama 默认值。
+	ConsumerMaxProcessingTimeMs int `toml:"consumerMaxProcessingTimeMs"`
+	// ConsumerNetMaxOpenRequests 是 consumer 侧单 broker 连接允许的最大未完成请求数，0 表示使用 Sarama 默认值。
+	ConsumerNetMaxOpenRequests int `toml:"consumerNetMaxOpenRequests"`
+	// ConsumerRetryMaxRetries 是可重试失败在一条消息内允许的最大重试次数（不含首次尝试）。
+	// 0 表示使用默认值，负数表示关闭重试：首次可重试失败即降级为死信。
+	ConsumerRetryMaxRetries int `toml:"consumerRetryMaxRetries"`
+	// ConsumerRetryBaseBackoffMs 是第一次重试前的退避时长，单位毫秒，默认 200。
+	ConsumerRetryBaseBackoffMs int `toml:"consumerRetryBaseBackoffMs"`
+	// ConsumerRetryMaxBackoffMs 是单次退避的时长上限，单位毫秒，默认 3200。
+	ConsumerRetryMaxBackoffMs int `toml:"consumerRetryMaxBackoffMs"`
+	// ConsumerRetryMaxTotalDurationMs 是一条消息全部重试加退避的总耗时上限，单位毫秒，默认 10000。
+	// 超过该上限即使重试次数还没用完，也会降级为死信，避免长时间占住 worker 和会话桶。
+	ConsumerRetryMaxTotalDurationMs int `toml:"consumerRetryMaxTotalDurationMs"`
 	// MysqlPersistBatchSize 是 mysql_persist 批量写的批次大小。
 	MysqlPersistBatchSize int `toml:"mysqlPersistBatchSize"`
 	// MysqlPersistFlushIntervalMs 是 mysql_persist 批量写的最长等待时间，单位毫秒。
@@ -153,6 +185,8 @@ type KafkaConfig struct {
 	SessionSeqRedisOnlyExperimental bool `toml:"sessionSeqRedisOnlyExperimental"`
 	// MysqlPersistNoopExperimental 为 true 时，mysql_persist 实验性旁路真实消息落库，仅用于定位性能瓶颈。
 	MysqlPersistNoopExperimental bool `toml:"mysqlPersistNoopExperimental"`
+	// AsyncPersistEnabled 为 true 时，chat consumer 只可靠写入 persist topic，MySQL 落库由 persist consumer 完成。
+	AsyncPersistEnabled bool `toml:"asyncPersistEnabled"`
 	// StatusUpdateNoopExperimental 为 true 时，实验性旁路 websocket 写回后的 status=sent 更新。
 	StatusUpdateNoopExperimental bool `toml:"statusUpdateNoopExperimental"`
 	// GroupAsyncPipelineExperimental 为 true 时，群聊消息实验性改为“顺序入口 + 下游子队列并行”。
@@ -228,6 +262,25 @@ func (k KafkaConfig) ResolveConsumerGroup() string {
 	return "chat"
 }
 
+// ResolvePersistTopic 返回异步落库事件主题，默认跟随 chat topic 派生。
+func (k KafkaConfig) ResolvePersistTopic() string {
+	if k.PersistTopic != "" {
+		return k.PersistTopic
+	}
+	if k.ChatTopic != "" {
+		return k.ChatTopic + "_persist"
+	}
+	return "chat_message_persist"
+}
+
+// ResolvePersistConsumerGroup 返回异步落库事件消费组。
+func (k KafkaConfig) ResolvePersistConsumerGroup() string {
+	if k.PersistConsumerGroup != "" {
+		return k.PersistConsumerGroup
+	}
+	return k.ResolveConsumerGroup() + "_persist"
+}
+
 // ResolveProducerRetryMax 返回生产端重试次数，默认值兼顾基础可靠性与实现复杂度。
 func (k KafkaConfig) ResolveProducerRetryMax() int {
 	if k.ProducerRetryMax > 0 {
@@ -258,6 +311,59 @@ func (k KafkaConfig) ResolveConsumerCommitInterval() time.Duration {
 		return time.Duration(k.ConsumerCommitIntervalMs) * time.Millisecond
 	}
 	return 250 * time.Millisecond
+}
+
+func (k KafkaConfig) ResolveConsumerAsyncCommitEnabled() bool {
+	return k.ConsumerAsyncCommitEnabled
+}
+
+// ConsumerRetryMaxRetriesDefault 是可重试失败的最大重试次数默认值。
+const ConsumerRetryMaxRetriesDefault = 5
+
+// ResolveConsumerRetryMaxRetries 返回可重试失败的最大重试次数（不含首次尝试）。
+func (k KafkaConfig) ResolveConsumerRetryMaxRetries() int {
+	if k.ConsumerRetryMaxRetries != 0 {
+		return k.ConsumerRetryMaxRetries
+	}
+	return ConsumerRetryMaxRetriesDefault
+}
+
+// ResolveConsumerRetryBaseBackoff 返回第一次重试前的退避时长。
+func (k KafkaConfig) ResolveConsumerRetryBaseBackoff() time.Duration {
+	if k.ConsumerRetryBaseBackoffMs > 0 {
+		return time.Duration(k.ConsumerRetryBaseBackoffMs) * time.Millisecond
+	}
+	return 200 * time.Millisecond
+}
+
+// ResolveConsumerRetryMaxBackoff 返回单次退避的时长上限。
+func (k KafkaConfig) ResolveConsumerRetryMaxBackoff() time.Duration {
+	if k.ConsumerRetryMaxBackoffMs > 0 {
+		return time.Duration(k.ConsumerRetryMaxBackoffMs) * time.Millisecond
+	}
+	return 3200 * time.Millisecond
+}
+
+// ResolveConsumerRetryMaxTotalDuration 返回一条消息重试与退避的总耗时上限。
+func (k KafkaConfig) ResolveConsumerRetryMaxTotalDuration() time.Duration {
+	if k.ConsumerRetryMaxTotalDurationMs > 0 {
+		return time.Duration(k.ConsumerRetryMaxTotalDurationMs) * time.Millisecond
+	}
+	return 10 * time.Second
+}
+
+func (k KafkaConfig) ResolveConsumerMaxProcessingTime() time.Duration {
+	if k.ConsumerMaxProcessingTimeMs > 0 {
+		return time.Duration(k.ConsumerMaxProcessingTimeMs) * time.Millisecond
+	}
+	return 0
+}
+
+func (k KafkaConfig) ResolveConsumerNetMaxOpenRequests() int {
+	if k.ConsumerNetMaxOpenRequests > 0 {
+		return k.ConsumerNetMaxOpenRequests
+	}
+	return 5
 }
 
 // ResolveMysqlPersistBatchSize 返回 mysql_persist 批量写默认批次大小。
@@ -416,6 +522,11 @@ func (k KafkaConfig) UseMysqlPersistNoopExperimental() bool {
 	return k.MysqlPersistNoopExperimental
 }
 
+// UseAsyncPersist 返回当前是否启用 persist topic 异步可靠落库。
+func (k KafkaConfig) UseAsyncPersist() bool {
+	return k.AsyncPersistEnabled
+}
+
 // UseStatusUpdateNoopExperimental 返回当前是否启用 status=sent 的 noop 实验路径。
 func (k KafkaConfig) UseStatusUpdateNoopExperimental() bool {
 	return k.StatusUpdateNoopExperimental
@@ -454,6 +565,8 @@ type Config struct {
 	LogConfig `toml:"logConfig"`
 	// JwtConfig 聚合 JWT 配置。
 	JwtConfig `toml:"jwtConfig"`
+	// IDConfig 聚合全局 ID 生成配置。
+	IDConfig `toml:"idConfig"`
 	// KafkaConfig 聚合消息队列配置。
 	KafkaConfig `toml:"kafkaConfig"`
 	// StaticSrcConfig 聚合静态资源目录配置。

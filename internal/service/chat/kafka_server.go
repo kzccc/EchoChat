@@ -21,7 +21,6 @@ import (
 	"echo_chat_server/internal/pressure"
 	"echo_chat_server/internal/service/kafka"
 	myredis "echo_chat_server/internal/service/redis"
-	"echo_chat_server/pkg/constants"
 	"echo_chat_server/pkg/zlog"
 	"github.com/IBM/sarama"
 	"github.com/go-redis/redis/v8"
@@ -42,6 +41,7 @@ type KafkaServer struct {
 	done            chan struct{}
 	stopped         chan struct{}
 	readerStopped   chan struct{}
+	persistStopped  chan struct{}
 	dispatchStopped chan struct{}
 	instanceID      string
 
@@ -68,6 +68,7 @@ func init() {
 			stopped: make(chan struct{}),
 
 			readerStopped:   make(chan struct{}),
+			persistStopped:  make(chan struct{}),
 			dispatchStopped: make(chan struct{}),
 			instanceID:      kafkaInstanceID(),
 		}
@@ -87,6 +88,11 @@ func (k *KafkaServer) Start() {
 	// 单独的 goroutine 以 ConsumerGroup 方式持续消费 chat topic，
 	// 这样 Kafka 的消费、重平衡和 offset 提交都交给 Sarama 的标准模型处理。
 	go k.startRemoteDispatchSubscriber()
+	if config.GetConfig().KafkaConfig.UseAsyncPersist() {
+		go k.startPersistConsumer()
+	} else {
+		close(k.persistStopped)
+	}
 	go func() {
 		defer func() {
 			if r := recover(); r != nil {
@@ -153,6 +159,32 @@ func (k *KafkaServer) Start() {
 					zlog.Error(err.Error())
 				}
 			}
+		}
+	}
+}
+
+func (k *KafkaServer) startPersistConsumer() {
+	defer close(k.persistStopped)
+	consumeCtx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() {
+		<-k.done
+		cancel()
+	}()
+
+	handler := &kafkaPersistConsumerHandler{}
+	for {
+		if k.IsShuttingDown() {
+			return
+		}
+		err := kafka.KafkaService.ConsumePersistEvents(consumeCtx, handler)
+		if err != nil {
+			if k.IsShuttingDown() || errors.Is(err, context.Canceled) || errors.Is(err, sarama.ErrClosedConsumerGroup) {
+				return
+			}
+			zlog.Error(err.Error())
+			time.Sleep(200 * time.Millisecond)
+			continue
 		}
 	}
 }
@@ -261,41 +293,68 @@ func (h *kafkaChatConsumerHandler) ConsumeClaim(session sarama.ConsumerGroupSess
 				zap.String("key", string(kafkaMessage.Key)),
 				zap.Int("value_size", len(kafkaMessage.Value)),
 			)
-			totalStart := time.Now()
-			err := h.server.handleConsumedMessage(kafkaMessage)
-			observability.ObserveKafkaConsumerStageDuration(
-				consumerGroup,
-				kafkaMessage.Topic,
-				kafkaMessage.Partition,
-				"total",
-				time.Since(totalStart),
+			// 失败治理：可重试失败在重试预算内原地重试（指数退避 + 次数上限 + 总耗时上限），
+			// 预算耗尽或不可重试统一写死信并放行位点；只有停机时位点保持不动。
+			// 改造前这里对可重试失败是直接跳过这条消息，后续消息的一次提交就会把位点越过它，
+			// 相当于静默丢弃，既没重试也没进死信。
+			outcome, stage, consumerErr, attempts := consumeWithRetryBudget(
+				resolveConsumeRetryPolicy(),
+				func() error {
+					totalStart := time.Now()
+					attemptErr := h.server.handleConsumedMessage(kafkaMessage)
+					observability.ObserveKafkaConsumerStageDuration(
+						consumerGroup,
+						kafkaMessage.Topic,
+						kafkaMessage.Partition,
+						"total",
+						time.Since(totalStart),
+					)
+					if attemptErr != nil {
+						attemptStage, _ := consumerErrorMeta(attemptErr)
+						observability.ObserveKafkaConsumeFailure(consumerGroup, kafkaMessage.Topic, kafkaMessage.Partition, attemptStage)
+					}
+					return attemptErr
+				},
+				func() bool {
+					select {
+					case <-h.server.done:
+						return true
+					default:
+						return false
+					}
+				},
 			)
-			if err != nil {
-				stage, retryable := consumerErrorMeta(err)
-				messageID := messageIDFromKafkaHeaders(kafkaMessage)
-				if !retryable {
-					var req request.ChatMessageRequest
-					if decodeErr := json.Unmarshal(kafkaMessage.Value, &req); decodeErr == nil && req.SendId != "" {
-						resolvedMessageID := messageID
-						if resolvedMessageID == "" {
-							resolvedMessageID = req.MessageId
-						}
-						if resolvedMessageID != "" {
-							clearIngressIdempotencyPending(req.SendId, ensureMessageID(resolvedMessageID))
-						}
-					}
+
+			switch outcome {
+			case consumeRetrySucceeded:
+				observability.ObserveKafkaConsumeHandled(consumerGroup, kafkaMessage.Topic, kafkaMessage.Partition, "success")
+			case consumeRetryStopped:
+				// 停机：这条消息还没有了结，位点保持不动，留给下次重放。
+				observability.ObserveKafkaConsumeHandled(consumerGroup, kafkaMessage.Topic, kafkaMessage.Partition, "retryable_failure")
+				return nil
+			default:
+				// 不可重试，或者可重试失败已经耗尽预算：写死信 + 放行位点。
+				if outcome == consumeRetryExhausted {
+					logConsumeRetryBudgetExhausted("chat.kafka", kafkaMessage, stage, attempts, consumerErr)
 				}
-				if !retryable {
-					if dlqErr := writeKafkaMessageToDLQ(kafkaMessage, nil, stage, false, err); dlqErr != nil {
-						zlog.Error(dlqErr.Error())
-					}
+				// 这条消息不会再重试，需要清掉入口幂等占位，否则客户端重发会被一直判成重复。
+				var req request.ChatMessageRequest
+				if decodeErr := json.Unmarshal(kafkaMessage.Value, &req); decodeErr == nil && req.SendId != "" {
+					normalizeClientMsgID(&req)
+					clearIngressIdempotencyPending(req.SendId, req.ClientMsgID)
 				}
-				observability.ObserveKafkaConsumeFailure(consumerGroup, kafkaMessage.Topic, kafkaMessage.Partition, stage)
+				if dlqErr := writeKafkaMessageToDLQ(kafkaMessage, nil, stage, false, consumerErr); dlqErr != nil {
+					zlog.Error(dlqErr.Error())
+				}
 				result := "non_retryable_failure"
-				if retryable {
-					result = "retryable_failure"
+				if outcome == consumeRetryExhausted {
+					result = "retry_budget_exhausted"
 				}
 				observability.ObserveKafkaConsumeHandled(consumerGroup, kafkaMessage.Topic, kafkaMessage.Partition, result)
+				errorMessage := ""
+				if consumerErr != nil {
+					errorMessage = consumerErr.Error()
+				}
 				zlog.Error(
 					"kafka.consume.chat.failed",
 					zap.String("event", "kafka.consume.chat.failed"),
@@ -304,14 +363,10 @@ func (h *kafkaChatConsumerHandler) ConsumeClaim(session sarama.ConsumerGroupSess
 					zap.Int32("partition", kafkaMessage.Partition),
 					zap.Int64("offset", kafkaMessage.Offset),
 					zap.String("stage", stage),
-					zap.Bool("retryable", retryable),
-					zap.String("error", err.Error()),
+					zap.Int("attempts", attempts),
+					zap.String("outcome", result),
+					zap.String("error", errorMessage),
 				)
-				if retryable {
-					continue
-				}
-			} else {
-				observability.ObserveKafkaConsumeHandled(consumerGroup, kafkaMessage.Topic, kafkaMessage.Partition, "success")
 			}
 			session.MarkMessage(kafkaMessage, "")
 			observability.ObserveKafkaConsumeMarked(consumerGroup, kafkaMessage.Topic, kafkaMessage.Partition)
@@ -366,6 +421,7 @@ func (k *KafkaServer) handleConsumedGroupMessage(
 	message *model.Message,
 	sendAvatar string,
 	messageBackUUID string,
+	clientMsgID string,
 ) error {
 	observeStage := func(stage string, start time.Time) {
 		if kafkaMessage == nil {
@@ -416,9 +472,10 @@ func (k *KafkaServer) handleConsumedGroupMessage(
 		}
 		recipientIDs = append(recipientIDs, message.SendId)
 	}
-	k.dispatchToKafkaRecipients(recipientIDs, jsonMessage, messageBackUUID)
+	k.dispatchToKafkaRecipients(recipientIDs, jsonMessage, messageBackUUID, message.ConversationKey)
 	observeStage("websocket_dispatch", dispatchStart)
-	completeIngressIdempotencyResult(message.SendId, message.Uuid, mustMarshalIngressReplayPayload(messageRsp))
+	completeIngressIdempotencyResult(message.SendId, clientMsgID, mustMarshalIngressReplayPayload(messageRsp))
+	invalidateSessionListCaches(members...)
 
 	if config.GetConfig().KafkaConfig.UseGroupAsyncPipelineExperimental() {
 		cacheInvalidateStart := time.Now()
@@ -439,21 +496,16 @@ func (k *KafkaServer) handleConsumedGroupMessage(
 			zlog.Error(err.Error())
 		} else {
 			rsp, _ = appendUniqueGroupCacheMessage(cacheKey, rsp, messageRsp, "kafka")
-			rspByte, err := json.Marshal(rsp)
+			redisWriteStart := time.Now()
+			err = setMessageListHotCache(cacheKey, rsp)
+			observeStage("redis_write", redisWriteStart)
 			if err != nil {
+				if kafkaMessage != nil {
+					observability.ObserveKafkaConsumeFailure(config.GetConfig().KafkaConfig.ResolveConsumerGroup(), kafkaMessage.Topic, kafkaMessage.Partition, "redis_write")
+				}
 				zlog.Error(err.Error())
 			} else {
-				redisWriteStart := time.Now()
-				err = myredis.SetKeyEx(cacheKey, string(rspByte), time.Minute*constants.REDIS_TIMEOUT)
-				observeStage("redis_write", redisWriteStart)
-				if err != nil {
-					if kafkaMessage != nil {
-						observability.ObserveKafkaConsumeFailure(config.GetConfig().KafkaConfig.ResolveConsumerGroup(), kafkaMessage.Topic, kafkaMessage.Partition, "redis_write")
-					}
-					zlog.Error(err.Error())
-				} else {
-					logMessageCacheUpdate("kafka", cacheKey, len(rsp))
-				}
+				logMessageCacheUpdate("kafka", cacheKey, len(rsp))
 			}
 		}
 	} else if !errors.Is(redisErr, redis.Nil) {
@@ -542,6 +594,11 @@ func (k *KafkaServer) Shutdown(ctx context.Context) error {
 	}
 	select {
 	case <-k.readerStopped:
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+	select {
+	case <-k.persistStopped:
 	case <-ctx.Done():
 		return ctx.Err()
 	}

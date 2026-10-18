@@ -3,11 +3,6 @@ package gorm
 // 本文件实现 session service 相关的业务服务，负责组织数据库、缓存和业务规则。
 
 import (
-	"encoding/json"
-	"errors"
-	"fmt"
-	"github.com/go-redis/redis/v8"
-	"gorm.io/gorm"
 	"echo_chat_server/internal/dao"
 	"echo_chat_server/internal/dto/request"
 	"echo_chat_server/internal/dto/respond"
@@ -19,6 +14,12 @@ import (
 	"echo_chat_server/pkg/enum/user_info/user_status_enum"
 	"echo_chat_server/pkg/util/random"
 	"echo_chat_server/pkg/zlog"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"github.com/go-redis/redis/v8"
+	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 	"time"
 )
 
@@ -122,6 +123,56 @@ func (s *sessionService) CheckOpenSessionAllowed(sendId, receiveId string) (stri
 	return "可以发起会话", true, 0
 }
 
+func (s *sessionService) unreadCount(ownerID, conversationKey string) int64 {
+	if ownerID == "" || conversationKey == "" {
+		return 0
+	}
+	var latest model.ConversationSequence
+	if err := dao.GormDB.Where("conversation_key = ?", conversationKey).Take(&latest).Error; err != nil {
+		return 0
+	}
+	var readState model.UserReadState
+	if err := dao.GormDB.Where("user_id = ? AND conversation_key = ?", ownerID, conversationKey).Take(&readState).Error; err != nil {
+		return latest.LastSeq
+	}
+	if latest.LastSeq <= readState.LastReadSeq {
+		return 0
+	}
+	return latest.LastSeq - readState.LastReadSeq
+}
+
+// MarkConversationRead 上报当前用户在某个会话内已经读到的最大 session_seq。
+func (s *sessionService) MarkConversationRead(userID, conversationKey string, lastReadSeq int64) (string, int) {
+	if userID == "" || conversationKey == "" || lastReadSeq <= 0 {
+		return "请求参数错误", -2
+	}
+	now := time.Now()
+	readState := model.UserReadState{
+		UserId:          userID,
+		ConversationKey: conversationKey,
+		LastReadSeq:     lastReadSeq,
+		CreatedAt:       now,
+		UpdatedAt:       now,
+	}
+	if err := dao.GormDB.Clauses(clause.OnConflict{
+		Columns: []clause.Column{{Name: "user_id"}, {Name: "conversation_key"}},
+		DoUpdates: clause.Assignments(map[string]interface{}{
+			"last_read_seq": gorm.Expr("GREATEST(last_read_seq, VALUES(last_read_seq))"),
+			"updated_at":    now,
+		}),
+	}).Create(&readState).Error; err != nil {
+		zlog.Error(err.Error())
+		return constants.SYSTEM_ERROR, -1
+	}
+	if err := myredis.DelKeysWithPattern("session_list_" + userID); err != nil {
+		zlog.Error(err.Error())
+	}
+	if err := myredis.DelKeysWithPattern("group_session_list_" + userID); err != nil {
+		zlog.Error(err.Error())
+	}
+	return "已读进度更新成功", 0
+}
+
 // DeleteSession 删除会话
 
 // OpenSession 打开会话
@@ -182,10 +233,11 @@ func (s *sessionService) GetUserSessionList(ownerId string) (string, []respond.U
 			for i := 0; i < len(sessionList); i++ {
 				if sessionList[i].ReceiveId[0] == 'U' {
 					sessionListRsp = append(sessionListRsp, respond.UserSessionListRespond{
-						SessionId: sessionList[i].Uuid,
-						Avatar:    sessionList[i].Avatar,
-						UserId:    sessionList[i].ReceiveId,
-						Username:  sessionList[i].ReceiveName,
+						SessionId:   sessionList[i].Uuid,
+						Avatar:      sessionList[i].Avatar,
+						UserId:      sessionList[i].ReceiveId,
+						Username:    sessionList[i].ReceiveName,
+						UnreadCount: s.unreadCount(ownerId, model.BuildConversationKey(sessionList[i].SendId, sessionList[i].ReceiveId)),
 					})
 				}
 			}
@@ -230,10 +282,11 @@ func (s *sessionService) GetGroupSessionList(ownerId string) (string, []respond.
 			for i := 0; i < len(sessionList); i++ {
 				if sessionList[i].ReceiveId[0] == 'G' {
 					sessionListRsp = append(sessionListRsp, respond.GroupSessionListRespond{
-						SessionId: sessionList[i].Uuid,
-						Avatar:    sessionList[i].Avatar,
-						GroupId:   sessionList[i].ReceiveId,
-						GroupName: sessionList[i].ReceiveName,
+						SessionId:   sessionList[i].Uuid,
+						Avatar:      sessionList[i].Avatar,
+						GroupId:     sessionList[i].ReceiveId,
+						GroupName:   sessionList[i].ReceiveName,
+						UnreadCount: s.unreadCount(ownerId, model.BuildConversationKey(sessionList[i].SendId, sessionList[i].ReceiveId)),
 					})
 				}
 			}

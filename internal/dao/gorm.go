@@ -95,6 +95,7 @@ func init() {
 		&model.ContactApply{},
 		&model.Message{},
 		&model.ConversationSequence{},
+		&model.UserReadState{},
 		&model.DLQMessage{},
 		&model.DLQOperationLog{},
 	) // 自动迁移，如果没有建表，会自动创建对应的表

@@ -30,6 +30,8 @@ type MessageBack struct {
 	Message []byte
 	// Uuid 是对应消息记录的主键，用于发送成功后回写状态。
 	Uuid string
+	// ConversationKey 是消息所属会话键，异步落库模式下用于把 insert/status 事件压到同一分区。
+	ConversationKey string
 	// EnqueuedAt 记录消息进入 websocket SendBack 队列的时刻，用于压测阶段统计 receiver queue wait。
 	EnqueuedAt time.Time
 	// statusUpdated 保证同一条消息在多接收者场景下最多只做一次状态更新。
@@ -303,7 +305,7 @@ func (c *Client) writeMessageBack(messageBack *MessageBack) bool {
 		return true
 	}
 	// 状态更新改为后台批量处理，避免把每条消息的 DB update 串在 websocket 写协程里。
-	kafkaStatusUpdater.enqueue(messageBack.Uuid, c.RoutePath)
+	kafkaStatusUpdater.enqueue(messageBack.Uuid, messageBack.ConversationKey, c.RoutePath)
 	return true
 }
 
@@ -367,7 +369,7 @@ func (c *Client) Read() {
 			c.notifyClientCritical("消息发送身份校验失败")
 			continue
 		}
-		message.MessageId = ensureMessageID(message.MessageId)
+		assignServerMessageID(&message)
 		pressure.EnsureBenchmarkMessageMeta(message.MessageId, message.Content)
 		pressure.ObserveBenchmarkEvent(message.MessageId, "ws_read_done", map[string]interface{}{
 			"route_path":    c.RoutePath,
@@ -375,19 +377,21 @@ func (c *Client) Read() {
 			"session_id":    message.SessionId,
 			"send_id":       message.SendId,
 			"receive_id":    message.ReceiveId,
+			"client_msg_id": message.ClientMsgID,
 		})
-		idemSession, existingRecord, err := beginIngressIdempotency(message.SendId, message.MessageId)
+		idemSession, existingRecord, err := beginIngressIdempotency(message.SendId, message.ClientMsgID)
 		if err != nil {
 			zlog.Error("ws.message.idempotency_failed", c.wsFields(
 				zap.String("event", "ws.message.idempotency_failed"),
 				zap.String("message_id", message.MessageId),
+				zap.String("client_msg_id", message.ClientMsgID),
 				zap.String("error", err.Error()),
 			)...)
 			c.notifyClientCritical("消息发送失败，请稍后重试")
 			continue
 		}
 		if !idemSession.Acquired {
-			if shouldShortCircuitIngressDuplicate(c, message.MessageId, existingRecord) {
+			if shouldShortCircuitIngressDuplicate(c, message.ClientMsgID, existingRecord) {
 				continue
 			}
 			c.notifyClientCritical("消息发送失败，请稍后重试")
@@ -399,6 +403,7 @@ func (c *Client) Read() {
 			zlog.Error("ws.message.marshal_failed", c.wsFields(
 				zap.String("event", "ws.message.marshal_failed"),
 				zap.String("message_id", message.MessageId),
+				zap.String("client_msg_id", message.ClientMsgID),
 				zap.String("error", err.Error()),
 			)...)
 			idemSession.clearPending()
@@ -410,6 +415,7 @@ func (c *Client) Read() {
 			c.wsFields(
 				zap.String("event", "ws.message.in"),
 				zap.String("message_id", message.MessageId),
+				zap.String("client_msg_id", message.ClientMsgID),
 				zap.String("session_id", message.SessionId),
 				zap.Int8("message_type", message.Type),
 				zap.String("send_id", message.SendId),
@@ -443,6 +449,7 @@ func (c *Client) Read() {
 			zlog.Error("kafka.produce.chat.failed", c.wsFields(
 				zap.String("event", "kafka.produce.chat.failed"),
 				zap.String("message_id", message.MessageId),
+				zap.String("client_msg_id", message.ClientMsgID),
 				zap.String("session_id", message.SessionId),
 				zap.String("send_id", message.SendId),
 				zap.String("receive_id", message.ReceiveId),
@@ -456,6 +463,7 @@ func (c *Client) Read() {
 		zlog.Info("kafka.produce.chat", c.wsFields(
 			zap.String("event", "kafka.produce.chat"),
 			zap.String("message_id", message.MessageId),
+			zap.String("client_msg_id", message.ClientMsgID),
 			zap.String("session_id", message.SessionId),
 			zap.String("send_id", message.SendId),
 			zap.String("receive_id", message.ReceiveId),

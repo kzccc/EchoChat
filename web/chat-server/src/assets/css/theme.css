@@ -1,0 +1,756 @@
+/* ============================================================
+   微信风格设计层
+   1. 设计令牌（颜色 / 圆角 / 阴影 / 字体）
+   2. 应用外壳（左导航栏 + 列表栏 + 内容区）
+   3. 通用组件样式（头像、列表项、气泡、徽标、空状态）
+   4. Element Plus 主题覆写
+   ============================================================ */
+
+:root {
+  /* 微信主色与状态色 */
+  --wx-green: #07c160;
+  --wx-green-hover: #06ad56;
+  --wx-green-soft: rgba(7, 193, 96, 0.1);
+  --wx-danger: #fa5151;
+  --wx-warning: #fa9d3b;
+  --wx-link: #576b95;
+
+  /* 中性色 */
+  --wx-bg: #ededed;
+  --wx-panel: #f7f7f7;
+  --wx-card: #ffffff;
+  --wx-hover: #ececec;
+  --wx-active: #e3e3e3;
+
+  /* 文字 */
+  --wx-text: #191919;
+  --wx-text-2: #7f7f7f;
+  --wx-text-3: #b2b2b2;
+  --wx-text-inverse: #ffffff;
+
+  /* 线条与阴影 */
+  --wx-line: #e7e7e7;
+  --wx-line-strong: #dcdcdc;
+  --wx-shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.04);
+  --wx-shadow: 0 4px 16px rgba(0, 0, 0, 0.08);
+  --wx-shadow-lg: 0 12px 40px rgba(0, 0, 0, 0.14);
+
+  /* 圆角 */
+  --wx-radius-sm: 4px;
+  --wx-radius: 6px;
+  --wx-radius-lg: 10px;
+
+  /* 侧边导航 */
+  --wx-rail: #2e2e2e;
+  --wx-rail-hover: #3a3a3a;
+  --wx-rail-text: #979797;
+
+  /* 气泡 */
+  --wx-bubble-self: #95ec69;
+  --wx-bubble-other: #ffffff;
+
+  /* 尺寸 */
+  --wx-rail-width: 64px;
+  --wx-list-width: 300px;
+  --wx-header-height: 60px;
+
+  --wx-font: -apple-system, BlinkMacSystemFont, "PingFang SC", "Hiragino Sans GB",
+    "Microsoft YaHei", "Helvetica Neue", Arial, sans-serif;
+}
+
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+html,
+body,
+#app {
+  height: 100%;
+}
+
+body {
+  font-family: var(--wx-font);
+  font-size: 14px;
+  color: var(--wx-text);
+  background: var(--wx-bg);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+::-webkit-scrollbar-thumb {
+  background: rgba(0, 0, 0, 0.16);
+  border-radius: 4px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(0, 0, 0, 0.28);
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+/* ---------- 应用外壳 ---------- */
+
+.wx-app {
+  display: flex;
+  height: 100%;
+  overflow: hidden;
+  background: var(--wx-bg);
+}
+
+/* 左侧深色导航栏 */
+.wx-rail {
+  width: var(--wx-rail-width);
+  flex: 0 0 var(--wx-rail-width);
+  background: var(--wx-rail);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 24px 0 16px;
+  gap: 6px;
+}
+
+.wx-rail__avatar {
+  margin-bottom: 18px;
+  cursor: pointer;
+  border-radius: var(--wx-radius);
+  overflow: hidden;
+  border: 2px solid rgba(255, 255, 255, 0.12);
+  transition: border-color 0.15s;
+}
+.wx-rail__avatar:hover {
+  border-color: rgba(255, 255, 255, 0.4);
+}
+
+.wx-rail__item {
+  position: relative;
+  width: 40px;
+  height: 40px;
+  border-radius: var(--wx-radius);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--wx-rail-text);
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+  font-size: 20px;
+}
+.wx-rail__item:hover {
+  background: var(--wx-rail-hover);
+  color: #d8d8d8;
+}
+.wx-rail__item.is-active {
+  color: var(--wx-green);
+  background: var(--wx-rail-hover);
+}
+
+.wx-rail__dot {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  min-width: 16px;
+  height: 16px;
+  padding: 0 4px;
+  border-radius: 8px;
+  background: var(--wx-danger);
+  color: #fff;
+  font-size: 11px;
+  line-height: 16px;
+  text-align: center;
+}
+
+.wx-rail__spacer {
+  flex: 1;
+}
+
+/* 列表栏 */
+.wx-list-pane {
+  width: var(--wx-list-width);
+  flex: 0 0 var(--wx-list-width);
+  display: flex;
+  flex-direction: column;
+  background: var(--wx-panel);
+  border-right: 1px solid var(--wx-line);
+  min-width: 0;
+}
+
+.wx-pane__search {
+  padding: 14px 12px 10px;
+}
+
+.wx-pane__title {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 16px 16px 8px;
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--wx-text);
+}
+
+.wx-pane__scroll {
+  flex: 1;
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding-bottom: 12px;
+}
+
+/* 内容区 */
+.wx-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--wx-card);
+  overflow: hidden;
+}
+
+.wx-main--muted {
+  background: var(--wx-bg);
+}
+
+/* ---------- 通用列表项 ---------- */
+
+.wx-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  height: 64px;
+  padding: 0 14px;
+  cursor: pointer;
+  user-select: none;
+  transition: background 0.12s;
+}
+.wx-row:hover {
+  background: var(--wx-hover);
+}
+.wx-row.is-active {
+  background: var(--wx-active);
+}
+
+.wx-row__body {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.wx-row__top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.wx-row__name {
+  font-size: 14px;
+  color: var(--wx-text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.wx-row__time {
+  flex: 0 0 auto;
+  font-size: 12px;
+  color: var(--wx-text-3);
+}
+
+.wx-row__sub {
+  font-size: 12.5px;
+  color: var(--wx-text-2);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ---------- 头像 ---------- */
+
+.wx-avatar {
+  flex: 0 0 auto;
+  border-radius: var(--wx-radius);
+  background: #d9d9d9;
+  color: #fff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 15px;
+  font-weight: 500;
+  overflow: hidden;
+  user-select: none;
+}
+.wx-avatar img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+.wx-avatar--round {
+  border-radius: 50%;
+}
+
+/* ---------- 徽标 ---------- */
+
+.wx-badge {
+  min-width: 18px;
+  height: 18px;
+  padding: 0 5px;
+  border-radius: 9px;
+  background: var(--wx-danger);
+  color: #fff;
+  font-size: 11px;
+  line-height: 18px;
+  text-align: center;
+  flex: 0 0 auto;
+}
+.wx-badge--dot {
+  min-width: 9px;
+  width: 9px;
+  height: 9px;
+  padding: 0;
+  border-radius: 50%;
+}
+
+/* ---------- 空状态 ---------- */
+
+.wx-empty {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  color: var(--wx-text-3);
+  font-size: 13px;
+  padding: 40px 20px;
+}
+.wx-empty__icon {
+  font-size: 40px;
+  color: #dcdcdc;
+}
+
+/* ---------- 聊天区 ---------- */
+
+.wx-chat-header {
+  height: var(--wx-header-height);
+  flex: 0 0 var(--wx-header-height);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 20px;
+  border-bottom: 1px solid var(--wx-line);
+  background: var(--wx-panel);
+}
+
+.wx-chat-header__title {
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.wx-chat-header__sub {
+  font-size: 12px;
+  color: var(--wx-text-2);
+  margin-top: 2px;
+}
+
+.wx-chat-scroll {
+  flex: 1;
+  overflow-y: auto;
+  background: var(--wx-bg);
+  padding: 16px 20px 8px;
+}
+
+.wx-msg {
+  display: flex;
+  gap: 10px;
+  margin-bottom: 16px;
+  align-items: flex-start;
+}
+.wx-msg--self {
+  flex-direction: row-reverse;
+}
+
+.wx-msg__main {
+  max-width: min(62%, 560px);
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.wx-msg--self .wx-msg__main {
+  align-items: flex-end;
+}
+
+.wx-msg__sender {
+  font-size: 12px;
+  color: var(--wx-text-2);
+  padding: 0 2px;
+}
+
+.wx-bubble {
+  position: relative;
+  padding: 9px 12px;
+  border-radius: var(--wx-radius);
+  background: var(--wx-bubble-other);
+  color: var(--wx-text);
+  font-size: 14px;
+  line-height: 1.55;
+  word-break: break-word;
+  white-space: pre-wrap;
+  box-shadow: var(--wx-shadow-sm);
+}
+.wx-msg--self .wx-bubble {
+  background: var(--wx-bubble-self);
+}
+
+.wx-bubble__image {
+  max-width: 220px;
+  max-height: 220px;
+  border-radius: var(--wx-radius);
+  display: block;
+  cursor: zoom-in;
+}
+
+.wx-bubble__file {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 180px;
+}
+.wx-bubble__file-name {
+  font-size: 13.5px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 220px;
+}
+.wx-bubble__file-size {
+  font-size: 12px;
+  color: var(--wx-text-2);
+}
+
+.wx-msg__divider {
+  text-align: center;
+  margin: 16px 0 12px;
+  font-size: 12px;
+  color: var(--wx-text-3);
+}
+
+.wx-sys-tip {
+  text-align: center;
+  margin: 10px 0;
+}
+.wx-sys-tip span {
+  display: inline-block;
+  padding: 4px 10px;
+  border-radius: var(--wx-radius-sm);
+  background: rgba(0, 0, 0, 0.06);
+  color: var(--wx-text-2);
+  font-size: 12px;
+}
+
+/* 输入区 */
+.wx-composer {
+  flex: 0 0 auto;
+  border-top: 1px solid var(--wx-line);
+  background: var(--wx-panel);
+  padding: 10px 16px 14px;
+}
+
+.wx-composer__toolbar {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  height: 34px;
+  color: var(--wx-text-2);
+  font-size: 19px;
+}
+.wx-composer__tool {
+  cursor: pointer;
+  transition: color 0.15s;
+}
+.wx-composer__tool:hover {
+  color: var(--wx-green);
+}
+
+.wx-composer__input {
+  width: 100%;
+  min-height: 76px;
+  max-height: 180px;
+  border: none;
+  outline: none;
+  resize: none;
+  background: transparent;
+  font-family: inherit;
+  font-size: 14px;
+  line-height: 1.6;
+  color: var(--wx-text);
+  padding: 6px 0;
+}
+
+.wx-composer__footer {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+}
+
+.wx-hint {
+  margin-right: auto;
+  font-size: 12px;
+  color: var(--wx-text-3);
+}
+
+/* ---------- 详情页 ---------- */
+
+.wx-page {
+  flex: 1;
+  overflow-y: auto;
+  background: var(--wx-panel);
+}
+
+.wx-page__header {
+  height: var(--wx-header-height);
+  display: flex;
+  align-items: center;
+  padding: 0 20px;
+  font-size: 15px;
+  font-weight: 600;
+  background: var(--wx-panel);
+  border-bottom: 1px solid var(--wx-line);
+  position: sticky;
+  top: 0;
+  z-index: 5;
+}
+
+.wx-card {
+  background: var(--wx-card);
+  border-radius: var(--wx-radius-lg);
+  margin: 16px;
+  padding: 20px;
+  box-shadow: var(--wx-shadow-sm);
+}
+
+.wx-card__title {
+  font-size: 14px;
+  font-weight: 600;
+  margin-bottom: 16px;
+}
+
+.wx-profile {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 26px 24px;
+  background: var(--wx-card);
+  border-bottom: 1px solid var(--wx-line);
+}
+
+.wx-profile__name {
+  font-size: 18px;
+  font-weight: 600;
+}
+
+.wx-profile__meta {
+  font-size: 12.5px;
+  color: var(--wx-text-2);
+  margin-top: 4px;
+}
+
+.wx-field {
+  display: flex;
+  align-items: center;
+  min-height: 52px;
+  border-bottom: 1px solid var(--wx-line);
+  gap: 12px;
+}
+.wx-field:last-child {
+  border-bottom: none;
+}
+.wx-field__label {
+  width: 88px;
+  flex: 0 0 88px;
+  color: var(--wx-text-2);
+  font-size: 13.5px;
+}
+.wx-field__value {
+  flex: 1;
+  min-width: 0;
+}
+
+/* ---------- 登录相关 ---------- */
+
+.wx-auth {
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--wx-bg);
+  padding: 24px;
+}
+
+.wx-auth__card {
+  width: 360px;
+  max-width: 100%;
+  background: var(--wx-card);
+  border-radius: var(--wx-radius-lg);
+  padding: 36px 32px 30px;
+  box-shadow: var(--wx-shadow);
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.wx-auth__title {
+  font-size: 22px;
+  font-weight: 600;
+  text-align: center;
+  letter-spacing: 1px;
+}
+
+.wx-auth__subtitle {
+  text-align: center;
+  color: var(--wx-text-2);
+  font-size: 13px;
+  margin-bottom: 8px;
+}
+
+.wx-auth__links {
+  display: flex;
+  justify-content: space-between;
+  font-size: 13px;
+  color: var(--wx-link);
+}
+.wx-auth__links span {
+  cursor: pointer;
+}
+.wx-auth__links span:hover {
+  color: var(--wx-green);
+}
+
+/* ---------- 工具类 ---------- */
+
+.wx-flex-center {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.wx-muted {
+  color: var(--wx-text-2);
+}
+
+.wx-ellipsis {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.wx-scroll-x {
+  overflow-x: auto;
+}
+
+/* ---------- Element Plus 主题覆写 ---------- */
+
+.el-button--primary {
+  --el-button-bg-color: var(--wx-green);
+  --el-button-border-color: var(--wx-green);
+  --el-button-hover-bg-color: var(--wx-green-hover);
+  --el-button-hover-border-color: var(--wx-green-hover);
+  --el-button-active-bg-color: var(--wx-green-hover);
+  --el-button-active-border-color: var(--wx-green-hover);
+}
+
+.el-button {
+  border-radius: var(--wx-radius);
+  font-family: var(--wx-font);
+}
+
+.el-input__wrapper {
+  border-radius: var(--wx-radius);
+  box-shadow: 0 0 0 1px var(--wx-line-strong) inset;
+  background: #fff;
+}
+.el-input__wrapper:hover {
+  box-shadow: 0 0 0 1px #c8c8c8 inset;
+}
+.el-input__wrapper.is-focus {
+  box-shadow: 0 0 0 1px var(--wx-green) inset;
+}
+
+.el-textarea__inner {
+  border-radius: var(--wx-radius);
+  box-shadow: 0 0 0 1px var(--wx-line-strong) inset;
+  font-family: var(--wx-font);
+}
+
+.el-dialog {
+  border-radius: var(--wx-radius-lg);
+}
+.el-dialog__title {
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.el-table {
+  --el-table-border-color: var(--wx-line);
+  --el-table-header-bg-color: var(--wx-panel);
+  font-size: 13px;
+}
+
+.el-tabs__item.is-active {
+  color: var(--wx-green);
+}
+.el-tabs__active-bar {
+  background-color: var(--wx-green);
+}
+
+.el-pagination {
+  --el-pagination-hover-color: var(--wx-green);
+}
+
+.el-switch.is-checked .el-switch__core {
+  background-color: var(--wx-green);
+  border-color: var(--wx-green);
+}
+
+/* 让 Element 的 message 更贴近微信提示条 */
+.el-message {
+  border-radius: var(--wx-radius);
+  min-width: 220px;
+}
+
+/* ---------- 响应式 ---------- */
+
+@media (max-width: 900px) {
+  .wx-list-pane {
+    width: 240px;
+    flex-basis: 240px;
+  }
+}
+
+@media (max-width: 720px) {
+  .wx-rail {
+    width: 56px;
+    flex-basis: 56px;
+    padding-top: 16px;
+  }
+  .wx-list-pane {
+    width: 100%;
+    flex-basis: 100%;
+    border-right: none;
+  }
+  .wx-main {
+    position: absolute;
+    inset: 0;
+    z-index: 20;
+  }
+  .wx-msg__main {
+    max-width: 74%;
+  }
+}

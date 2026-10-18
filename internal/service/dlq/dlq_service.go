@@ -97,7 +97,7 @@ func (s *service) Stats() (respond.DLQStatsRespond, error) {
 
 	var statusRows []aggregateRow
 	if err := dao.GormDB.Model(&model.DLQMessage{}).
-		Select("status AS key, COUNT(*) AS total").
+		Select("status AS `key`, COUNT(*) AS total").
 		Group("status").
 		Scan(&statusRows).Error; err != nil {
 		return respond.DLQStatsRespond{}, err
@@ -119,7 +119,7 @@ func (s *service) Stats() (respond.DLQStatsRespond, error) {
 	var manualRows []aggregateRow
 	if err := dao.GormDB.Model(&model.DLQMessage{}).
 		Where("status = ?", model.DLQStatusManual).
-		Select("manual_status AS key, COUNT(*) AS total").
+		Select("manual_status AS `key`, COUNT(*) AS total").
 		Group("manual_status").
 		Scan(&manualRows).Error; err != nil {
 		return respond.DLQStatsRespond{}, err

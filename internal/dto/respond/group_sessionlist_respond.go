@@ -10,4 +10,6 @@ type GroupSessionListRespond struct {
 	GroupId string `json:"group_id"`
 	// Avatar 保存响应中的 `avatar` 字段。
 	Avatar string `json:"avatar"`
+	// UnreadCount 保存当前用户在该会话中的未读消息数。
+	UnreadCount int64 `json:"unread_count"`
 }

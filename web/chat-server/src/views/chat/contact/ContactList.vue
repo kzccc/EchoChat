@@ -1,818 +1,557 @@
 <template>
-  <!-- 联系人页面负责展示好友、群聊和联系人管理相关操作。 -->
-  <div class="chat-wrap">
-    <div
-      class="chat-window"
-      :style="{
-        boxShadow: `var(${'--el-box-shadow-dark'})`,
-      }"
-    >
-      <el-container class="chat-window-container">
-        <el-aside class="aside-container">
-          <NavigationModal></NavigationModal>
-          <ContactListModal></ContactListModal>
-        </el-aside>
-        <el-container class="chat-container">
-          <el-header>
-            <h2 class="chat-name"></h2>
-          </el-header>
-          <el-main class="main-container">
-            <div class="chat-screen"></div>
-            <div class="tool-bar">
-              <div class="tool-bar-left">
-                <el-tooltip
-                  effect="customized"
-                  content="表情包"
-                  placement="top"
-                  hide-after="0"
-                  enterable="false"
-                >
-                  <button class="image-button">
-                    <svg
-                      t="1733502796507"
-                      class="sticker-icon"
-                      viewBox="0 0 1024 1024"
-                      version="1.1"
-                      xmlns="http://www.w3.org/2000/svg"
-                      p-id="1555"
-                      width="128"
-                      height="128"
-                    >
-                      <path
-                        d="M504.32 31.872a472.256 472.256 0 1 1 0 944.512 472.256 472.256 0 0 1 0-944.512z m0 63.36a408.96 408.96 0 1 0 0 817.856 408.96 408.96 0 0 0 0-817.92z m228.864 487.808v0.192a217.856 217.856 0 1 1-435.712 0V583.04h435.712zM370.496 321.536a73.024 73.024 0 1 1 0 146.048 73.024 73.024 0 0 1 0-146.048z m289.664 0a73.024 73.024 0 1 1 0 146.048 73.024 73.024 0 0 1 0-146.048z"
-                        fill="#2c2c2c"
-                        p-id="1556"
-                      ></path>
-                    </svg>
-                  </button>
-                </el-tooltip>
-                <el-tooltip
-                  effect="customized"
-                  content="文件上传"
-                  placement="top"
-                  hide-after="0"
-                  enterable="false"
-                >
-                  <button class="image-button">
-                    <svg
-                      t="1733503065264"
-                      class="upload-icon"
-                      viewBox="0 0 1024 1024"
-                      version="1.1"
-                      xmlns="http://www.w3.org/2000/svg"
-                      p-id="2430"
-                      width="128"
-                      height="128"
-                    >
-                      <path
-                        d="M543.7 157v534c0 16.6-13.4 30-30 30s-30-13.4-30-30V157c0-16.6 13.4-30 30-30 16.5 0 30 13.4 30 30z"
-                        fill=""
-                        p-id="2431"
-                      ></path>
-                      <path
-                        d="M323.1 331c11.8 11.8 30.7 11.8 42.5 0l119.9-119.9c15.6-15.6 40.9-15.6 56.6 0L662 331c11.7 11.7 30.7 11.7 42.4 0s11.7-30.7 0-42.4L541.7 126.1c-15.6-15.6-41-15.6-56.6 0L323 288.6c-11.6 11.8-11.6 30.7 0.1 42.4zM853.7 913h-680c-33.1 0-60-26.9-60-60V583.7c0-16.4 12.8-30.2 29.2-30.7 16.9-0.4 30.8 13.2 30.8 30v240c0 16.6 13.4 30 30 30h620c16.6 0 30-13.4 30-30V583.7c0-16.4 12.8-30.2 29.2-30.7 16.9-0.4 30.8 13.2 30.8 30v270c0 33.1-26.9 60-60 60z"
-                        fill=""
-                        p-id="2432"
-                      ></path>
-                    </svg>
-                  </button>
-                </el-tooltip>
-                <el-tooltip
-                  effect="customized"
-                  content="聊天记录"
-                  placement="top"
-                  hide-after="0"
-                  enterable="false"
-                >
-                  <button class="image-button">
-                    <svg
-                      t="1733504061769"
-                      class="record-icon"
-                      viewBox="0 0 1024 1024"
-                      version="1.1"
-                      xmlns="http://www.w3.org/2000/svg"
-                      p-id="5492"
-                      width="128"
-                      height="128"
-                    >
-                      <path
-                        d="M695.04 194.32H98.08c-18.32 0-33.16-14.85-33.16-33.16 0-18.32 14.85-33.16 33.16-33.16h596.96c18.32 0 33.16 14.85 33.16 33.16 0 18.31-14.84 33.16-33.16 33.16zM298.97 393.3H96.19c-17.27 0-31.27-14-31.27-31.27v-3.79c0-17.27 14-31.27 31.27-31.27h202.78c17.27 0 31.27 14 31.27 31.27v3.79c-0.01 17.28-14.01 31.27-31.27 31.27zM230.74 592.29H98.08c-18.32 0-33.16-14.85-33.16-33.16 0-18.32 14.85-33.16 33.16-33.16h132.66c18.32 0 33.16 14.85 33.16 33.16 0.01 18.31-14.84 33.16-33.16 33.16zM230.74 791.28H98.08c-18.32 0-33.16-14.85-33.16-33.16 0-18.32 14.85-33.16 33.16-33.16h132.66c18.32 0 33.16 14.85 33.16 33.16 0.01 18.31-14.84 33.16-33.16 33.16zM728.2 691.78H595.55c-18.32 0-33.16-14.85-33.16-33.16 0-18.32 14.85-33.16 33.16-33.16H728.2c18.32 0 33.16 14.85 33.16 33.16 0.01 18.31-14.84 33.16-33.16 33.16z"
-                        p-id="5493"
-                      ></path>
-                      <path
-                        d="M562.38 658.62V525.96c0-18.32 14.85-33.16 33.16-33.16 18.32 0 33.16 14.85 33.16 33.16v132.66c0 18.32-14.85 33.16-33.16 33.16-18.31 0-33.16-14.85-33.16-33.16z"
-                        p-id="5494"
-                      ></path>
-                      <path
-                        d="M960.35 625.45c0 183.16-148.48 331.64-331.64 331.64S297.07 808.62 297.07 625.45s148.48-331.64 331.64-331.64 331.64 148.48 331.64 331.64zM628.71 360.14c-146.53 0-265.31 118.79-265.31 265.31s118.79 265.31 265.31 265.31 265.31-118.79 265.31-265.31-118.78-265.31-265.31-265.31z"
-                        p-id="5495"
-                      ></path>
-                    </svg>
-                  </button>
-                </el-tooltip>
-                <el-tooltip
-                  effect="customized"
-                  content="全文复制"
-                  placement="top"
-                  hide-after="0"
-                  enterable="false"
-                >
-                  <button class="image-button">
-                    <svg
-                      t="1733503137487"
-                      class="copy-icon"
-                      viewBox="0 0 1024 1024"
-                      version="1.1"
-                      xmlns="http://www.w3.org/2000/svg"
-                      p-id="3442"
-                      width="128"
-                      height="128"
-                    >
-                      <path
-                        d="M394.666667 106.666667h448a74.666667 74.666667 0 0 1 74.666666 74.666666v448a74.666667 74.666667 0 0 1-74.666666 74.666667H394.666667a74.666667 74.666667 0 0 1-74.666667-74.666667V181.333333a74.666667 74.666667 0 0 1 74.666667-74.666666z m0 64a10.666667 10.666667 0 0 0-10.666667 10.666666v448a10.666667 10.666667 0 0 0 10.666667 10.666667h448a10.666667 10.666667 0 0 0 10.666666-10.666667V181.333333a10.666667 10.666667 0 0 0-10.666666-10.666666H394.666667z m245.333333 597.333333a32 32 0 0 1 64 0v74.666667a74.666667 74.666667 0 0 1-74.666667 74.666666H181.333333a74.666667 74.666667 0 0 1-74.666666-74.666666V394.666667a74.666667 74.666667 0 0 1 74.666666-74.666667h74.666667a32 32 0 0 1 0 64h-74.666667a10.666667 10.666667 0 0 0-10.666666 10.666667v448a10.666667 10.666667 0 0 0 10.666666 10.666666h448a10.666667 10.666667 0 0 0 10.666667-10.666666v-74.666667z"
-                        fill="#000000"
-                        p-id="3443"
-                      ></path>
-                    </svg>
-                  </button>
-                </el-tooltip>
-              </div>
-              <div class="tool-bar-right">
-                <el-tooltip
-                  effect="customized"
-                  content="音视频通话"
-                  placement="top"
-                  hide-after="0"
-                  enterable="false"
-                >
-                  <button class="image-button">
-                    <svg
-                      t="1733503700535"
-                      class="av-icon"
-                      viewBox="0 0 1024 1024"
-                      version="1.1"
-                      xmlns="http://www.w3.org/2000/svg"
-                      p-id="4492"
-                      width="128"
-                      height="128"
-                    >
-                      <path
-                        d="M790.207709 1023.317561c-100.48917-0.05687-302.832389-33.89448-528.321671-260.00933C-57.722981 442.903032-9.212929 154.458736 25.02277 119.995557L114.194824 30.709763c19.506387-19.563257 47.372654-30.709763 76.319449-30.709763 28.662446 0 56.073753 10.975897 75.23892 30.141064l3.980896 4.606465 131.881373 176.865489c35.145618 52.377208 33.32578 108.564701-4.720205 146.781295l-39.012773 39.069643c11.942686 71.087415 42.31123 113.398645 87.181606 158.439632l5.686993 5.686993c51.865378 52.092858 96.678885 97.076974 174.021993 103.730756l38.899033-38.955903a99.522381 99.522381 0 0 1 71.883595-30.368544c24.169721 0 49.419971 8.41675 73.020993 24.340331l178.002888 133.303121c21.212485 14.558703 34.918138 38.728424 37.477285 66.253471a113.853604 113.853604 0 0 1-33.26891 89.513274l-89.058314 89.285793c-22.179274 22.236144-85.304898 24.624681-111.465068 24.624681h-0.056869zM190.628013 88.091525a19.278907 19.278907 0 0 0-13.421304 5.402644L94.290348 176.63801c-4.549595 22.861713-44.984116 247.554815 230.607575 523.885815 202.684439 203.196268 377.50261 233.507942 463.774297 233.507942 30.652893 0 50.898589-3.753416 58.121071-5.402643l80.982784-82.006443a26.160169 26.160169 0 0 0 7.67744-18.539598l-178.457847-135.293568c-4.151505-2.786627-12.568255-7.677441-20.302566-7.677441a13.478174 13.478174 0 0 0-10.009108 3.980895l-65.969121 66.196601-18.653338-0.17061c-125.227591-1.080529-193.812729-69.950017-254.322337-130.743974l-5.686993-5.630123c-52.490947-52.661557-102.763968-117.20893-115.445963-232.199934l-2.388537-21.155614L333.826502 295.609908c8.41675-8.41675 1.990448-22.349883-4.833944-32.586471L200.750861 91.105631a17.515939 17.515939 0 0 0-10.122848-3.014106z m350.603132 312.159058c-44.131067 0-79.959125-34.235699-79.959125-76.319449V170.609797c0-42.08375 35.828057-76.376319 79.959125-76.376319h292.311452c37.136066 0 68.812618 77.968677 77.627457 111.863156 8.1324-4.606465 14.103743-8.07553 15.923581-9.269799 8.75797-5.743863 18.937687-62.670665 29.458625-62.670665a53.457736 53.457736 0 0 1 25.36399 6.426303 56.130623 56.130623 0 0 1 29.003666 49.87493v121.303566c0 21.496834-11.373986 40.775741-29.572365 50.443629a52.547817 52.547817 0 0 1-24.681551 6.141953c-10.577807 0-21.041875-56.983672-29.970454-62.955015-2.331667-1.421748-8.814839-5.118294-17.686549-10.179718-11.089637 30.368544-41.515051 105.038765-75.40953 105.038765H541.231145z m283.326003-88.944574V183.178052H550.273464v128.127957h274.283684z"
-                        fill="#666666"
-                        p-id="4493"
-                      ></path>
-                    </svg>
-                  </button>
-                </el-tooltip>
-              </div>
-            </div>
-          </el-main>
-          <el-footer>
-            <div class="chat-input">
-              <el-input
-                v-model="chatMessage"
-                type="textarea"
-                show-word-limit
-                maxlength="500"
-                :autosize="{ minRows: 7.9, maxRows: 7 }"
-                placeholder="请输入内容"
-              />
-            </div>
-            <div class="chat-send">
-              <el-button class="send-btn">发送</el-button>
-            </div>
-          </el-footer>
-        </el-container>
-      </el-container>
+  <section class="wx-list-pane">
+    <div class="wx-pane__search">
+      <el-input v-model="keyword" placeholder="搜索联系人" size="default" clearable>
+        <template #prefix>
+          <el-icon><Search /></el-icon>
+        </template>
+      </el-input>
     </div>
-  </div>
+
+    <div class="wx-pane__title">
+      <span>通讯录</span>
+      <el-dropdown trigger="click" @command="onCommand">
+        <el-button link size="small">
+          新建<el-icon><ArrowDown /></el-icon>
+        </el-button>
+        <template #dropdown>
+          <el-dropdown-menu>
+            <el-dropdown-item command="friend">添加联系人</el-dropdown-item>
+            <el-dropdown-item command="group">新建群聊</el-dropdown-item>
+          </el-dropdown-menu>
+        </template>
+      </el-dropdown>
+    </div>
+
+    <div class="wx-pane__scroll">
+      <!-- 新的朋友 -->
+      <div class="wx-row wx-row--entry" @click="toggleSection('requests')">
+        <div class="wx-entry__icon" style="background: #f5a623">
+          <el-icon><UserFilled /></el-icon>
+        </div>
+        <div class="wx-row__body">
+          <div class="wx-row__top">
+            <span class="wx-row__name">新的朋友</span>
+            <span v-if="requests.length" class="wx-badge">{{ requests.length }}</span>
+          </div>
+          <div class="wx-row__sub"><span class="wx-ellipsis">好友申请</span></div>
+        </div>
+      </div>
+
+      <div v-if="sections.requests" class="wx-request-list">
+        <div v-if="!requests.length" class="wx-request-empty">暂无新的申请</div>
+        <div v-for="item in requests" :key="item.contact_id" class="wx-request">
+          <wx-avatar :name="item.contact_name" :src="item.contact_avatar" :size="34" />
+          <div class="wx-request__body">
+            <div class="wx-ellipsis">{{ item.contact_name || item.contact_id }}</div>
+            <div class="wx-muted wx-ellipsis">{{ item.message || "请求添加你为好友" }}</div>
+          </div>
+          <el-button size="small" type="primary" @click="acceptRequest(item)">通过</el-button>
+          <el-button size="small" @click="refuseRequest(item)">忽略</el-button>
+        </div>
+      </div>
+
+      <!-- 群聊 -->
+      <div class="wx-section-title">群聊</div>
+      <div v-if="!groups.length" class="wx-section-empty">还没有加入任何群聊</div>
+      <div
+        v-for="item in groups"
+        :key="item.group_id"
+        class="wx-row"
+        :class="{ 'is-active': selectedKey === `group:${item.group_id}` }"
+        @click="selectGroup(item)"
+      >
+        <wx-avatar :name="item.group_name" :src="item.avatar" :size="38" />
+        <div class="wx-row__body">
+          <div class="wx-row__name wx-ellipsis">{{ item.group_name }}</div>
+        </div>
+      </div>
+
+      <!-- 联系人 -->
+      <div class="wx-section-title">联系人（{{ contacts.length }}）</div>
+      <div v-if="!contacts.length" class="wx-section-empty">还没有联系人</div>
+      <div
+        v-for="item in filteredContacts"
+        :key="item.id"
+        class="wx-row"
+        :class="{ 'is-active': selectedKey === `user:${item.id}` }"
+        @click="selectContact(item)"
+      >
+        <wx-avatar :name="item.name" :src="item.avatar" :size="38" />
+        <div class="wx-row__body">
+          <div class="wx-row__name wx-ellipsis">{{ item.name || item.id }}</div>
+          <div class="wx-row__sub">
+            <span class="wx-ellipsis">{{ item.id }}</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 右侧资料区 -->
+  <section class="wx-main wx-main--muted">
+    <div v-if="!selected" class="wx-empty">
+      <el-icon class="wx-empty__icon"><User /></el-icon>
+      <span>选择一个联系人查看资料</span>
+    </div>
+
+    <div v-else class="wx-page">
+      <div class="wx-profile">
+        <wx-avatar
+          :name="selectedName"
+          :src="selectedAvatar"
+          :size="64"
+        />
+        <div>
+          <div class="wx-profile__name">{{ selectedName }}</div>
+          <div class="wx-profile__meta">
+            {{ selectedKind === "group" ? "群聊" : "联系人" }}
+            <span v-if="selectedId"> · {{ selectedId }}</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="wx-card">
+        <div class="wx-card__title">资料</div>
+        <div class="wx-field">
+          <span class="wx-field__label">昵称</span>
+          <span class="wx-field__value">{{ selectedName }}</span>
+        </div>
+        <div v-if="selectedKind === 'user'" class="wx-field">
+          <span class="wx-field__label">手机号</span>
+          <span class="wx-field__value">{{ profile.contact_phone || "未填写" }}</span>
+        </div>
+        <div v-if="selectedKind === 'user'" class="wx-field">
+          <span class="wx-field__label">邮箱</span>
+          <span class="wx-field__value">{{ profile.contact_email || "未填写" }}</span>
+        </div>
+        <div v-if="selectedKind === 'user'" class="wx-field">
+          <span class="wx-field__label">生日</span>
+          <span class="wx-field__value">{{ profile.contact_birthday || "未填写" }}</span>
+        </div>
+        <div v-if="selectedKind === 'user'" class="wx-field">
+          <span class="wx-field__label">个性签名</span>
+          <span class="wx-field__value">{{ profile.contact_signature || "未填写" }}</span>
+        </div>
+        <div v-if="selectedKind === 'group'" class="wx-field">
+          <span class="wx-field__label">群公告</span>
+          <span class="wx-field__value">{{ profile.notice || "暂无" }}</span>
+        </div>
+        <div v-if="selectedKind === 'group'" class="wx-field">
+          <span class="wx-field__label">成员数</span>
+          <span class="wx-field__value">{{ profile.member_cnt || 0 }}</span>
+        </div>
+        <div v-if="selectedKind === 'group'" class="wx-field">
+          <span class="wx-field__label">加群方式</span>
+          <span class="wx-field__value">
+            {{ Number(profile.add_mode) === 0 ? "直接加入" : "需要审核" }}
+          </span>
+        </div>
+      </div>
+
+      <div class="wx-card">
+        <el-button type="primary" style="width: 100%" @click="openChatWithSelected">
+          发消息
+        </el-button>
+        <el-button
+          v-if="selectedKind === 'user'"
+          type="danger"
+          plain
+          style="width: 100%; margin: 10px 0 0"
+          @click="removeSelectedContact"
+        >
+          删除联系人
+        </el-button>
+      </div>
+    </div>
+  </section>
+
+  <!-- 添加联系人 -->
+  <el-dialog v-model="friendDialog" title="添加联系人" width="380px">
+    <el-input v-model="friendForm.contact_id" placeholder="对方用户 ID（U 开头）" />
+    <el-input
+      v-model="friendForm.message"
+      placeholder="验证消息（可留空）"
+      style="margin-top: 10px"
+    />
+    <template #footer>
+      <el-button @click="friendDialog = false">取消</el-button>
+      <el-button type="primary" :loading="friendSubmitting" @click="submitFriend">
+        发送申请
+      </el-button>
+    </template>
+  </el-dialog>
+
+  <!-- 新建群聊 -->
+  <el-dialog v-model="groupDialog" title="新建群聊" width="400px">
+    <el-input v-model="groupForm.name" placeholder="群名称" />
+    <el-input
+      v-model="groupForm.notice"
+      type="textarea"
+      :rows="3"
+      placeholder="群公告（可留空）"
+      style="margin-top: 10px"
+    />
+    <div class="wx-dialog-row">
+      <span class="wx-muted">加群方式</span>
+      <el-radio-group v-model="groupForm.add_mode">
+        <el-radio :value="0">直接加入</el-radio>
+        <el-radio :value="1">需要审核</el-radio>
+      </el-radio-group>
+    </div>
+    <template #footer>
+      <el-button @click="groupDialog = false">取消</el-button>
+      <el-button type="primary" :loading="groupSubmitting" @click="submitGroup">
+        创建
+      </el-button>
+    </template>
+  </el-dialog>
 </template>
 
-<script>
-// 组件脚本负责当前页面的数据状态、接口调用和用户交互逻辑。
-import { reactive, toRefs, onMounted } from "vue";
+<script setup>
+import { computed, onMounted, reactive, ref } from "vue";
 import { useRouter } from "vue-router";
 import { useStore } from "vuex";
-import Modal from "@/components/Modal.vue";
-import SmallModal from "@/components/SmallModal.vue";
-import ContactListModal from "@/components/ContactListModal.vue";
-import NavigationModal from "@/components/NavigationModal.vue";
-import axios from "axios";
-import { ElMessage } from "element-plus";
-export default {
-  name: "ContactList",
-  components: {
-    Modal,
-    SmallModal,
-    ContactListModal,
-    NavigationModal,
-  },
-  setup() {
-    const router = useRouter();
-    const store = useStore();
-    const data = reactive({
-      chatMessage: "",
-      chatName: "",
-      userInfo: store.state.userInfo,
-      contactSearch: "",
-      createGroupReq: {
-        owner_id: "",
-        name: "",
-        notice: "",
-        add_mode: null,
-        avatar: "",
-      },
-      isCreateGroupModalVisible: false,
-      isApplyContactModalVisible: false,
-      isNewContactModalVisible: false,
-      contactUserList: [],
-      myGroupList: [],
-      myJoinedGroupList: [],
-      applyContactReq: {
-        owner_id: "",
-        contact_id: "",
-        message: "",
-      },
-      ownListReq: {
-        owner_id: "",
-      },
-      newContactList: [],
-      applyContent: "",
-    });
+import { ElMessage, ElMessageBox } from "element-plus";
+import WxAvatar from "@/components/WxAvatar.vue";
+import {
+  applyContact,
+  createGroup,
+  deleteContact,
+  getContactInfo,
+  getGroupInfo,
+  getNewContactList,
+  getUserList,
+  loadMyGroup,
+  loadMyJoinedGroup,
+  passContactApply,
+  refuseContactApply,
+} from "@/api";
 
-    const handleCreateGroup = async () => {
-      try {
-        data.createGroupReq.owner_id = data.userInfo.uuid;
-        const response = await axios.post(
-          store.state.backendUrl + "/group/createGroup",
-          data.createGroupReq
-        );
-      } catch (error) {
-        console.error(error);
-      }
-    };
-    const showCreateGroupModal = () => {
-      data.isCreateGroupModalVisible = true;
-    };
-    const quitCreateGroupModal = () => {
-      data.isCreateGroupModalVisible = false;
-    };
-    const closeCreateGroupModal = () => {
-      if (data.createGroupReq.name == "") {
-        ElMessage("请输入群聊名称");
-        return;
-      }
-      if (data.createGroupReq.add_mode == null) {
-        ElMessage("请选择加群方式");
-        return;
-      }
-      data.isCreateGroupModalVisible = false;
-      handleCreateGroup();
-    };
-    const showApplyContactModal = () => {
-      data.isApplyContactModalVisible = true;
-    };
-    const quitApplyContactModal = () => {
-      data.isApplyContactModalVisible = false;
-    };
-    const closeApplyContactModal = () => {
-      if (data.applyContactReq.contact_id == "") {
-        ElMessage.error("请输入申请用户/群组id");
-        return;
-      }
-      if (data.applyContactReq.contact_id[0] == 'G') {
-        handleApplyGroup();
-      } else {
-        handleApplyContact();
-      }
-    };
+const store = useStore();
+const router = useRouter();
 
-    const showNewContactModal = () => {
-      handleNewContactList();
-    };
+const meId = computed(() => store.state.userInfo?.uuid || "");
 
-    const quitNewContactModal = () => {
-      data.isNewContactModalVisible = false;
-      data.newContactList = [];
-    };
-    const handleApplyGroup = async () => {
-      try {
-        let req = {
-          group_id: data.applyContactReq.contact_id,
-        }
-        let rsp = await axios.post(store.state.backendUrl + "/group/checkGroupAddMode", req);
-        if (rsp.data.code == 200) {
-          if (rsp.data.data == 0) { // 直接加入
-            handleEnterDirectly(data.applyContactReq.contact_id);
-            return;
-          }
-        } else {
-          ElMessage.error("申请失败");
-          return;
-        }
-        data.applyContactReq.owner_id = data.userInfo.uuid;
-        rsp = await axios.post(
-          store.state.backendUrl + "/contact/applyContact",
-          data.applyContactReq
-        );
-        console.log(rsp);
-        if (rsp.data.code == 200) {
-          if (rsp.data.message == "申请成功") {
-            data.isApplyContactModalVisible = false;
-            ElMessage.success("申请成功");
-            return;
-          } else {
-            ElMessage.error(rsp.data.message);
-          }
-        } else {
-          ElMessage.error("申请失败");
-        }
-      } catch (error) {
-        console.error(error);
-      }
-    };
-    const handleApplyContact = async () => {
-      try {
-        data.applyContactReq.owner_id = data.userInfo.uuid;
-        const rsp = await axios.post(
-          store.state.backendUrl + "/contact/applyContact",
-          data.applyContactReq
-        );
-        console.log(rsp);
-        if (rsp.data.code == 200) {
-          if (rsp.data.message == "申请成功") {
-            data.isApplyContactModalVisible = false;
-            ElMessage.success("申请成功");
-            return;
-          }
-        } 
-        ElMessage.error(rsp.data.message);
-      } catch (error) {
-        console.error(error);
-      }
-    };
-    const handleShowUserList = async () => {
-      try {
-        data.ownListReq.owner_id = data.userInfo.uuid;
-        const getUserListRsp = await axios.post(
-          store.state.backendUrl + "/contact/getUserList",
-          data.ownListReq
-        );
-        data.contactUserList = getUserListRsp.data.data;
-      } catch (error) {
-        console.error(error);
-      }
-    };
-    const handleHideUserList = () => {
-      data.contactUserList = [];
-    };
+const keyword = ref("");
+const contacts = ref([]);
+const groups = ref([]);
+const requests = ref([]);
+const sections = reactive({ requests: false });
 
-    const handleShowMyGroupList = async () => {
-      try {
-        data.ownListReq.owner_id = data.userInfo.uuid;
-        const loadMyGroupRsp = await axios.post(
-          store.state.backendUrl + "/group/loadMyGroup",
-          data.ownListReq
-        );
-        data.myGroupList = loadMyGroupRsp.data.data;
-      } catch (error) {
-        console.error(error);
-      }
-    };
-    const handleHideMyGroupList = () => {
-      data.myGroupList = [];
-    };
-    const handleShowMyJoinedGroupList = async () => {
-      try {
-        data.ownListReq.owner_id = data.userInfo.uuid;
-        const loadMyJoinedGroupRsp = await axios.post(
-          store.state.backendUrl + "/contact/loadMyJoinedGroup",
-          data.ownListReq
-        );
-        data.myJoinedGroupList = loadMyJoinedGroupRsp.data.data;
-      } catch (error) {
-        console.error(error);
-      }
-    };
-    const handleHideMyJoinedGroupList = () => {
-      data.myJoinedGroupList = [];
-    };
+const selectedKey = ref("");
+const selectedKind = ref("");
+const selectedId = ref("");
+const selectedName = ref("");
+const selectedAvatar = ref("");
+const profile = ref({});
+const profileLoading = ref(false);
+// 已经取过的资料缓存起来，重复点击同一个联系人不再发请求。
+const profileCache = new Map();
 
+const friendDialog = ref(false);
+const friendSubmitting = ref(false);
+const friendForm = reactive({ contact_id: "", message: "" });
 
-    const handleToChatUser = async (user) => {
-      try {
-        const req = {
-          send_id: data.userInfo.uuid,
-          receive_id: user.user_id,
-        };
-        const rsp = await axios.post(
-          store.state.backendUrl + "/session/checkOpenSessionAllowed",
-          req
-        );
-        if (rsp.data.code == 200) {
-          if (rsp.data.data == true) {
-            router.push("/chat/" + user.user_id);
-          } else {
-            ElMessage.warning(rsp.data.message);
-            console.error(rsp.data.message);
-          }
-        } else {
-          ElMessage.error(rsp.data.message);
-          console.error(rsp.data.message);
-        }
-      } catch (error) {
-        ElMessage.error(error);
-        console.error(error);
-      }
-    };
+const groupDialog = ref(false);
+const groupSubmitting = ref(false);
+const groupForm = reactive({ name: "", notice: "", add_mode: 0 });
 
-    const handleToChatGroup = async (group) => {
-      try {
-        const req = {
-          send_id: data.userInfo.uuid,
-          receive_id: group.group_id,
-        };
-        const rsp = await axios.post(
-          store.state.backendUrl + "/session/checkOpenSessionAllowed",
-          req
-        );
-        if (rsp.data.code == 200) {
-          if (rsp.data.data == true) {
-            router.push("/chat/" + group.group_id);
-          } else {
-            ElMessage.warning(rsp.data.message);
-            console.error(rsp.data.message);
-          }
-        } else {
-          if (rsp.data.code == 400) {
-            ElMessage.warning(rsp.data.message);
-            console.error(rsp.data.message);
-          } else {
-            ElMessage.error(rsp.data.message);
-            console.error(rsp.data.message);
-          }
-        }
-      } catch (error) {
-        console.error(error);
-      }
-    };
+const filteredContacts = computed(() => {
+  const key = keyword.value.trim().toLowerCase();
+  if (!key) return contacts.value;
+  return contacts.value.filter((item) =>
+    String(item.name || item.id || "")
+      .toLowerCase()
+      .includes(key)
+  );
+});
 
-    const handleNewContactList = async () => {
-      try {
-        data.ownListReq.owner_id = data.userInfo.uuid;
-        const rsp = await axios.post(
-          store.state.backendUrl + "/contact/getNewContactList",
-          data.ownListReq
-        );
-        console.log(rsp);
-        data.newContactList = rsp.data.data;
-        if (data.newContactList == null) {
-          ElMessage.warning("没有新的好友申请");
-          return;
-        }
-        data.isNewContactModalVisible = true;
-        console.log(rsp);
-      } catch (error) {
-        console.error(error);
-      }
-    };
+const selected = computed(() => !!selectedKey.value);
 
-    const handleAgree = async (contactId) => {
-      try {
-        const req = {
-          owner_id: data.userInfo.uuid,
-          contact_id: contactId,
-        };
-        const rsp = await axios.post(
-          store.state.backendUrl + "/contact/passContactApply",
-          req
-        );
-        console.log(rsp);
-        if (rsp.data.code == 200) {
-          ElMessage.success(rsp.data.message);
-          data.newContactList = data.newContactList.filter(
-            (c) => c.contact_id !== contactId
-          );
-        } else {
-          ElMessage.error(rsp.data.message);
-        }
-      } catch (error) {
-        console.error(error);
-      }
-    };
-    const handleEnterDirectly = async (groupId) => {
-      try {
-        const req = {
-          owner_id:  groupId,
-          contact_id: data.userInfo.uuid,
-        };
-        const rsp = await axios.post(
-          store.state.backendUrl + "/group/enterGroupDirectly",
-          req
-        );
-        console.log(rsp);
-        if (rsp.data.code == 200) {
-          ElMessage.success(rsp.data.message);
-          data.isApplyContactModalVisible = false;
-        } else {
-          ElMessage.error(rsp.data.message);
-        }
-      } catch (error) {
-        console.error(error);
-      }
-    };
-    const handleReject = async (contactId) => {
-      try {
-        const req = {
-          owner_id: data.userInfo.uuid,
-          contact_id: contactId,
-        };
-        const rsp = await axios.post(
-          store.state.backendUrl + "/contact/refuseContactApply",
-          req
-        );
-        console.log(rsp);
-        if (rsp.data.code == 200) {
-          ElMessage.success(rsp.data.message);
-          console.log(rsp.data.message);
-          data.newContactList = data.newContactList.filter(
-            (c) => c.contact_id !== contactId
-          );
-        } else if (rsp.data.code == 400) {
-          ElMessage.warning(rsp.data.message);
-          console.log(rsp.data.message);
-        } else if (rsp.data.code == 500) {
-          ElMessage.error(rsp.data.message);
-          console.log(rsp.data.message);
-        }
-      } catch (error) {
-        console.error(error);
-      }
-    }
-    const handleBlack = async (contactId) => {
-      try {
-        const req = {
-          owner_id: data.userInfo.uuid,
-          contact_id: contactId,
-        };
-        const rsp = await axios.post(
-          store.state.backendUrl + "/contact/blackApply",
-          req
-        );
-        if (rsp.data.code == 200) {
-          ElMessage.success(rsp.data.message);
-          console.log(rsp.data.message);
-          data.newContactList = data.newContactList.filter(
-            (c) => c.contact_id !== contactId
-          );
-        } else if (rsp.data.code == 400) {
-          ElMessage.warning(rsp.data.message);
-          console.log(rsp.data.message);
-        } else if (rsp.data.code == 500) {
-          ElMessage.error(rsp.data.message);
-          console.log(rsp.data.message);
-        }
-      } catch (error) {
-        ElMessage.error(error);
-        console.error(error);
-      }
-    }
-    const handleCancelBlack = async (user) => {
-      try {
-        const req = {
-          owner_id: data.userInfo.uuid,
-          contact_id: user.user_id,
-        };
-        const rsp = await axios.post(
-          store.state.backendUrl + "/contact/cancelBlackContact",
-          req
-        );
-        if (rsp.data.code == 200) {
-          ElMessage.success(rsp.data.message);
-          console.log(rsp.data.message);
-        } else if (rsp.data.code == 400) {
-          ElMessage.warning(rsp.data.message);
-          console.log(rsp.data.message);
-        } else if (rsp.data.code == 500) {
-          ElMessage.error(rsp.data.message);
-          console.log(rsp.data.message);
-        }
-      } catch (error) {
-        ElMessage.error(error);
-        console.error(error);
-      }
-    };
-
-
-    return {
-      ...toRefs(data),
-      router,
-      handleCreateGroup,
-      showCreateGroupModal,
-      closeCreateGroupModal,
-      quitCreateGroupModal,
-      showApplyContactModal,
-      quitApplyContactModal,
-      closeApplyContactModal,
-      showNewContactModal,
-      quitNewContactModal,
-      handleShowUserList,
-      handleHideUserList,
-      handleShowMyGroupList,
-      handleHideMyGroupList,
-      handleShowMyJoinedGroupList,
-      handleHideMyJoinedGroupList,
-      handleToChatUser,
-      handleToChatGroup,
-      handleNewContactList,
-      handleAgree,
-      handleReject,
-      handleCancelBlack,
-      handleBlack,
-    };
-  },
+const applyProfile = (data, kind) => {
+  profile.value = data || {};
+  if (kind === "user") {
+    selectedName.value = data.contact_name || selectedName.value;
+    selectedAvatar.value = data.contact_avatar || "";
+    return;
+  }
+  selectedName.value = data.name || selectedName.value;
+  selectedAvatar.value = data.avatar || "";
 };
+
+const selectContact = async (item) => {
+  const key = `user:${item.id}`;
+  // 已经是当前选中项就直接返回，避免连点造成重复请求和重复渲染。
+  if (selectedKey.value === key && !profileLoading.value) return;
+
+  selectedKey.value = key;
+  selectedKind.value = "user";
+  selectedId.value = item.id;
+  selectedName.value = item.name || item.id;
+  selectedAvatar.value = item.avatar || "";
+  // 先用列表里已有的数据把右侧面板画出来，网络回来再补全。
+  profile.value = {};
+
+  const cached = profileCache.get(key);
+  if (cached) {
+    applyProfile(cached, "user");
+    return;
+  }
+
+  profileLoading.value = true;
+  try {
+    const result = await getContactInfo(item.id);
+    if (result.ok && result.data) {
+      profileCache.set(key, result.data);
+      applyProfile(result.data, "user");
+    }
+  } finally {
+    profileLoading.value = false;
+  }
+};
+
+const selectGroup = async (item) => {
+  const key = `group:${item.group_id}`;
+  if (selectedKey.value === key && !profileLoading.value) return;
+
+  selectedKey.value = key;
+  selectedKind.value = "group";
+  selectedId.value = item.group_id;
+  selectedName.value = item.group_name || item.group_id;
+  selectedAvatar.value = item.avatar || "";
+  profile.value = {};
+
+  const cached = profileCache.get(key);
+  if (cached) {
+    applyProfile(cached, "group");
+    return;
+  }
+
+  profileLoading.value = true;
+  try {
+    const result = await getGroupInfo(item.group_id);
+    if (result.ok && result.data) {
+      profileCache.set(key, result.data);
+      applyProfile(result.data, "group");
+    }
+  } finally {
+    profileLoading.value = false;
+  }
+};
+
+const loadAll = async () => {
+  if (!meId.value) return;
+  // 群聊要合并两个来源：我加入的群 + 我创建的群。
+  // 后端的 loadMyJoinedGroup 会刻意排除自己当群主的群，只调它会导致群主看不到自己的群。
+  const [contactResult, joinedResult, ownedResult, requestResult] = await Promise.all([
+    getUserList(meId.value),
+    loadMyJoinedGroup(meId.value),
+    loadMyGroup(meId.value),
+    getNewContactList(meId.value),
+  ]);
+  if (contactResult.ok && Array.isArray(contactResult.data)) {
+    // 接口返回的是 { user_id, user_name, avatar }，这里统一成页面内部使用的 id/name。
+    contacts.value = contactResult.data
+      .filter((item) => !item.is_deleted)
+      .map((item) => ({
+        id: item.user_id,
+        name: item.user_name,
+        avatar: item.avatar,
+      }))
+      .filter((item) => !!item.id);
+  }
+
+  const merged = new Map();
+  if (joinedResult.ok && Array.isArray(joinedResult.data)) {
+    joinedResult.data.forEach((item) => merged.set(item.group_id, item));
+  }
+  if (ownedResult.ok && Array.isArray(ownedResult.data)) {
+    ownedResult.data.forEach((item) => {
+      // 「我创建的群」只返回 id/名称/头像，缺的字段用已加入的那份补齐
+      const existing = merged.get(item.group_id) || {};
+      merged.set(item.group_id, { ...existing, ...item });
+    });
+  }
+  groups.value = Array.from(merged.values());
+
+  if (requestResult.ok && Array.isArray(requestResult.data)) {
+    requests.value = requestResult.data;
+  }
+};
+
+const toggleSection = (name) => {
+  sections[name] = !sections[name];
+};
+
+const openChatWithSelected = () => {
+  if (!selectedId.value) return;
+  router.push({
+    name: "ContactChat",
+    params: { id: selectedId.value },
+    query: {
+      name: selectedName.value,
+      avatar: selectedAvatar.value,
+      kind: selectedKind.value,
+    },
+  });
+};
+
+const acceptRequest = async (item) => {
+  const result = await passContactApply(meId.value, item.contact_id);
+  if (!result.ok) {
+    ElMessage.error(result.message || "操作失败");
+    return;
+  }
+  ElMessage.success("已通过");
+  await loadAll();
+};
+
+const refuseRequest = async (item) => {
+  const result = await refuseContactApply(meId.value, item.contact_id);
+  if (!result.ok) {
+    ElMessage.error(result.message || "操作失败");
+    return;
+  }
+  ElMessage.success("已忽略");
+  await loadAll();
+};
+
+const removeSelectedContact = async () => {
+  try {
+    await ElMessageBox.confirm("删除后聊天记录仍会保留，确定删除？", "删除联系人", {
+      confirmButtonText: "删除",
+      cancelButtonText: "取消",
+      type: "warning",
+    });
+  } catch (error) {
+    return;
+  }
+  const result = await deleteContact(meId.value, selectedId.value);
+  if (!result.ok) {
+    ElMessage.error(result.message || "删除失败");
+    return;
+  }
+  ElMessage.success("已删除");
+  selectedKey.value = "";
+  await loadAll();
+};
+
+const onCommand = (command) => {
+  if (command === "friend") {
+    friendForm.contact_id = "";
+    friendForm.message = "";
+    friendDialog.value = true;
+    return;
+  }
+  groupForm.name = "";
+  groupForm.notice = "";
+  groupForm.add_mode = 0;
+  groupDialog.value = true;
+};
+
+const submitFriend = async () => {
+  const contactId = friendForm.contact_id.trim();
+  if (!contactId) {
+    ElMessage.warning("请输入对方用户 ID");
+    return;
+  }
+  friendSubmitting.value = true;
+  try {
+    const result = await applyContact(meId.value, contactId, friendForm.message.trim());
+    if (!result.ok) {
+      ElMessage.error(result.message || "申请失败");
+      return;
+    }
+    ElMessage.success("申请已发送");
+    friendDialog.value = false;
+  } finally {
+    friendSubmitting.value = false;
+  }
+};
+
+const submitGroup = async () => {
+  const name = groupForm.name.trim();
+  if (!name) {
+    ElMessage.warning("请输入群名称");
+    return;
+  }
+  groupSubmitting.value = true;
+  try {
+    const result = await createGroup({
+      owner_id: meId.value,
+      name,
+      notice: groupForm.notice.trim(),
+      add_mode: groupForm.add_mode,
+      avatar: "",
+    });
+    if (!result.ok) {
+      ElMessage.error(result.message || "创建失败");
+      return;
+    }
+    ElMessage.success("群聊已创建");
+    groupDialog.value = false;
+    await loadAll();
+  } finally {
+    groupSubmitting.value = false;
+  }
+};
+
+onMounted(loadAll);
 </script>
 
 <style scoped>
-.contactlist-header {
+.wx-row--entry {
+  height: 60px;
+}
+.wx-entry__icon {
+  width: 38px;
+  height: 38px;
+  border-radius: var(--wx-radius);
+  color: #fff;
   display: flex;
-  flex-direction: row;
-  margin-top: 10px;
-  margin-bottom: 10px;
-}
-
-.contact-search-input {
-  width: 185px;
-  height: 30px;
-  margin-left: 5px;
-  margin-right: 5px;
-}
-
-.contactlist-header-right {
-  width: 40px;
-  height: 30px;
-  display: flex;
-  justify-content: center;
-  align-items: center;
-}
-
-.create-group-btn {
-  background-color: rgb(252, 210.9, 210.9);
-  cursor: pointer;
-  border: none;
-  height: 100%;
-  width: 30px;
-  height: 30px;
-  display: flex;
-  justify-content: center;
-  align-items: center;
-  border-radius: 10px;
-}
-
-.create-group-icon {
-  width: 15px;
-  height: 15px;
-}
-
-.el-menu {
-  background-color: rgb(252, 210.9, 210.9);
-  width: 101%;
-}
-
-.el-menu-item {
-  background-color: rgb(255, 255, 255);
-  height: 45px;
-}
-
-.contactlist-user-title {
-  font-family: Arial, Helvetica, sans-serif;
-}
-
-h3 {
-  font-family: Arial, Helvetica, sans-serif;
-  color: rgb(69, 69, 68);
-}
-
-.modal-quit-btn-container {
-  height: 30%;
-  width: 100%;
-  display: flex;
-  flex-direction: row-reverse;
-}
-
-.modal-quit-btn {
-  background-color: rgba(255, 255, 255, 0);
-  color: rgb(229, 25, 25);
-  padding: 15px;
-  border: none;
-  cursor: pointer;
-  position: fixed;
-  justify-content: center;
-  align-items: center;
-}
-
-.modal-header {
-  height: 20%;
-  width: 100%;
-  display: flex;
-  flex-direction: column;
-  justify-content: center;
-  align-items: center;
-  /*background-color:aqua;*/
-}
-
-.modal-body {
-  height: 55%;
-  width: 100%;
-  display: flex;
-  flex-direction: column;
   align-items: center;
   justify-content: center;
+  font-size: 18px;
+  flex: 0 0 auto;
 }
-
-.newcontact-modal-body {
-  height: 70%;
-  width: 100%;
+.wx-section-title {
+  padding: 14px 14px 6px;
+  font-size: 12px;
+  color: var(--wx-text-2);
+}
+.wx-section-empty {
+  padding: 6px 14px 10px;
+  font-size: 12.5px;
+  color: var(--wx-text-3);
+}
+.wx-request-list {
+  padding: 4px 8px 8px;
+  background: rgba(0, 0, 0, 0.02);
+  border-radius: var(--wx-radius);
+  margin: 0 8px;
+}
+.wx-request {
   display: flex;
-  flex-direction: column;
   align-items: center;
-  justify-content: center;
+  gap: 10px;
+  padding: 8px 6px;
 }
-
-.newcontact-modal-footer {
-  height: 10%;
-  width: 100%;
+.wx-request__body {
+  flex: 1;
+  min-width: 0;
+  font-size: 13px;
+}
+.wx-request-empty {
+  padding: 10px;
+  font-size: 12.5px;
+  color: var(--wx-text-3);
+}
+.wx-dialog-row {
   display: flex;
-  justify-content: center;
   align-items: center;
-}
-
-.modal-footer {
-  height: 25%;
-  width: 100%;
-  display: flex;
-  justify-content: center;
-  align-items: center;
-}
-
-.modal-header-title {
-  height: 70%;
-  width: 100%;
-  display: flex;
-  justify-content: center;
-  align-items: center;
-}
-
-.contactlist-avatar {
-  width: 30px;
-  height: 30px;
-  margin-right: 20px;
-}
-
-.newcontact-list {
-  width: 280px;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  font-family: Arial, Helvetica, sans-serif;
-}
-
-.newcontact-item {
-  display: flex;
-  flex-direction: row;
   justify-content: space-between;
-  align-items: center;
-  width: 100%;
-  height: 40px;
-}
-
-.action-btn {
-  background-color: rgb(252, 210.9, 210.9);
-  border: none;
-  cursor: pointer;
-  justify-content: center;
-  align-items: center;
-  font-family: Arial, Helvetica, sans-serif;
-}
-
-.contactlist-user-menu-item {
-  justify-content: center;
-  align-items: center;
-}
-
-.contactlist-user-item {
-  width: 221px;
-  height: 45px;
-  display: flex;
-  align-items: center;
-  color: rgba(43, 42, 42, 0.893);
-}
-
-.contactlist-user-avatar {
-  width: 30px;
-  height: 30px;
-  margin-left: 20px;
-  margin-right: 20px;
+  margin-top: 14px;
+  font-size: 13px;
 }
 </style>

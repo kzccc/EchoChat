@@ -17,19 +17,19 @@ const (
 )
 
 type ingressIdempotencySession struct {
-	Key       string
-	Owner     string
-	MessageID string
-	SendID    string
-	Acquired  bool
+	Key         string
+	Owner       string
+	ClientMsgID string
+	SendID      string
+	Acquired    bool
 }
 
-func beginIngressIdempotency(sendID, messageID string) (ingressIdempotencySession, myredis.IngressIdempotencyRecord, error) {
+func beginIngressIdempotency(sendID, clientMsgID string) (ingressIdempotencySession, myredis.IngressIdempotencyRecord, error) {
 	session := ingressIdempotencySession{
-		Key:       buildIngressIdempotencyKey(sendID, messageID),
-		Owner:     "ING" + random.GetNowAndLenRandomString(6),
-		MessageID: messageID,
-		SendID:    sendID,
+		Key:         buildIngressIdempotencyKey(sendID, clientMsgID),
+		Owner:       "ING" + random.GetNowAndLenRandomString(6),
+		ClientMsgID: clientMsgID,
+		SendID:      sendID,
 	}
 	acquired, record, err := myredis.TryAcquireIngressIdempotency(session.Key, session.Owner, ingressIdempotencyPendingTTL)
 	if err != nil {
@@ -39,8 +39,8 @@ func beginIngressIdempotency(sendID, messageID string) (ingressIdempotencySessio
 	return session, record, nil
 }
 
-func buildIngressIdempotencyKey(sendID, messageID string) string {
-	return "ingress_idempotency:" + sendID + ":" + messageID
+func buildIngressIdempotencyKey(sendID, clientMsgID string) string {
+	return "ingress_idempotency:" + sendID + ":" + clientMsgID
 }
 
 func (s ingressIdempotencySession) completeWithPayload(payload []byte) {
@@ -57,7 +57,7 @@ func (s ingressIdempotencySession) completePayloadForKey(payload []byte) {
 			"message.ingress_idempotency.done_failed",
 			zap.String("event", "message.ingress_idempotency.done_failed"),
 			zap.String("module", "chat.ingress"),
-			zap.String("message_id", s.MessageID),
+			zap.String("client_msg_id", s.ClientMsgID),
 			zap.String("send_id", s.SendID),
 			zap.String("error", err.Error()),
 		)
@@ -68,7 +68,7 @@ func (s ingressIdempotencySession) completePayloadForKey(payload []byte) {
 			"message.ingress_idempotency.done_skipped",
 			zap.String("event", "message.ingress_idempotency.done_skipped"),
 			zap.String("module", "chat.ingress"),
-			zap.String("message_id", s.MessageID),
+			zap.String("client_msg_id", s.ClientMsgID),
 			zap.String("send_id", s.SendID),
 		)
 	}
@@ -87,27 +87,33 @@ func (s ingressIdempotencySession) clearPendingForKey() {
 			"message.ingress_idempotency.clear_failed",
 			zap.String("event", "message.ingress_idempotency.clear_failed"),
 			zap.String("module", "chat.ingress"),
-			zap.String("message_id", s.MessageID),
+			zap.String("client_msg_id", s.ClientMsgID),
 			zap.String("send_id", s.SendID),
 			zap.String("error", err.Error()),
 		)
 	}
 }
 
-func completeIngressIdempotencyResult(sendID, messageID string, payload []byte) {
+func completeIngressIdempotencyResult(sendID, clientMsgID string, payload []byte) {
+	if clientMsgID == "" {
+		return
+	}
 	session := ingressIdempotencySession{
-		Key:       buildIngressIdempotencyKey(sendID, messageID),
-		MessageID: messageID,
-		SendID:    sendID,
+		Key:         buildIngressIdempotencyKey(sendID, clientMsgID),
+		ClientMsgID: clientMsgID,
+		SendID:      sendID,
 	}
 	session.completePayloadForKey(payload)
 }
 
-func clearIngressIdempotencyPending(sendID, messageID string) {
+func clearIngressIdempotencyPending(sendID, clientMsgID string) {
+	if clientMsgID == "" {
+		return
+	}
 	session := ingressIdempotencySession{
-		Key:       buildIngressIdempotencyKey(sendID, messageID),
-		MessageID: messageID,
-		SendID:    sendID,
+		Key:         buildIngressIdempotencyKey(sendID, clientMsgID),
+		ClientMsgID: clientMsgID,
+		SendID:      sendID,
 	}
 	session.clearPendingForKey()
 }
@@ -129,14 +135,14 @@ func replayIngressDoneRecord(client *Client, record myredis.IngressIdempotencyRe
 	})
 }
 
-func shouldShortCircuitIngressDuplicate(client *Client, messageID string, record myredis.IngressIdempotencyRecord) bool {
+func shouldShortCircuitIngressDuplicate(client *Client, clientMsgID string, record myredis.IngressIdempotencyRecord) bool {
 	switch record.Status {
 	case myredis.IngressIdempotencyStatusPending:
 		zlog.Info(
 			"message.ingress_idempotency.pending_duplicate",
 			zap.String("event", "message.ingress_idempotency.pending_duplicate"),
 			zap.String("module", "chat.ingress"),
-			zap.String("message_id", messageID),
+			zap.String("client_msg_id", clientMsgID),
 		)
 		return true
 	case myredis.IngressIdempotencyStatusDone:
@@ -144,7 +150,7 @@ func shouldShortCircuitIngressDuplicate(client *Client, messageID string, record
 			"message.ingress_idempotency.done_duplicate",
 			zap.String("event", "message.ingress_idempotency.done_duplicate"),
 			zap.String("module", "chat.ingress"),
-			zap.String("message_id", messageID),
+			zap.String("client_msg_id", clientMsgID),
 		)
 		if replayIngressDoneRecord(client, record) {
 			return true
@@ -156,7 +162,7 @@ func shouldShortCircuitIngressDuplicate(client *Client, messageID string, record
 				"message.ingress_idempotency.unknown_status",
 				zap.String("event", "message.ingress_idempotency.unknown_status"),
 				zap.String("module", "chat.ingress"),
-				zap.String("message_id", messageID),
+				zap.String("client_msg_id", clientMsgID),
 				zap.String("status", string(record.Status)),
 			)
 			return true

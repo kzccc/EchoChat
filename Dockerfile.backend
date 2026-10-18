@@ -1,0 +1,14 @@
+FROM debian:bookworm-slim
+
+WORKDIR /app
+
+RUN mkdir -p /app/logs /app/static/avatars /app/static/files /app/configs
+
+COPY build/echo_chat_server /app/echo_chat_server
+COPY configs/config_docker.toml /app/configs/config_docker.toml
+
+ENV ECHOCHAT_CONFIG=/app/configs/config_docker.toml
+
+EXPOSE 10000
+
+CMD ["/app/echo_chat_server"]

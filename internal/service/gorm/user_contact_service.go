@@ -3,12 +3,6 @@ package gorm
 // 本文件实现 user contact service 相关的业务服务，负责组织数据库、缓存和业务规则。
 
 import (
-	"encoding/json"
-	"errors"
-	"fmt"
-	"github.com/go-redis/redis/v8"
-	"go.uber.org/zap"
-	"gorm.io/gorm"
 	"echo_chat_server/internal/dao"
 	"echo_chat_server/internal/dto/request"
 	"echo_chat_server/internal/dto/respond"
@@ -22,6 +16,12 @@ import (
 	"echo_chat_server/pkg/enum/user_info/user_status_enum"
 	"echo_chat_server/pkg/util/random"
 	"echo_chat_server/pkg/zlog"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"github.com/go-redis/redis/v8"
+	"go.uber.org/zap"
+	"gorm.io/gorm"
 	"time"
 )
 
@@ -248,9 +248,7 @@ func (u *userContactService) DeleteContact(ownerId, contactId string) (string, i
 		zlog.Error(res.Error.Error())
 		return constants.SYSTEM_ERROR, -1
 	}
-	if err := myredis.DelKeysWithPattern("contact_user_list_" + ownerId); err != nil {
-		zlog.Error(err.Error())
-	}
+	invalidateUserContactCaches(ownerId, contactId)
 	return "删除联系人成功", 0
 }
 
@@ -474,9 +472,7 @@ func (u *userContactService) PassContactApply(ownerId string, contactId string) 
 			zlog.Error(res.Error.Error())
 			return constants.SYSTEM_ERROR, -1
 		}
-		if err := myredis.DelKeysWithPattern("contact_user_list_" + ownerId); err != nil {
-			zlog.Error(err.Error())
-		}
+		invalidateUserContactCaches(ownerId, contactId)
 		return "已添加该联系人", 0
 	} else {
 		var group model.GroupInfo
@@ -517,9 +513,7 @@ func (u *userContactService) PassContactApply(ownerId string, contactId string) 
 			zlog.Error(res.Error.Error())
 			return constants.SYSTEM_ERROR, -1
 		}
-		if err := myredis.DelKeysWithPattern("my_joined_group_list_" + ownerId); err != nil {
-			zlog.Error(err.Error())
-		}
+		invalidateGroupMembershipCaches(ownerId, contactId)
 		return "已通过加群申请", 0
 	}
 }

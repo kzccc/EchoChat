@@ -38,12 +38,18 @@ issuer = "EchoChat"
 subject = "user-auth"
 key = "58c89e18c2a896b83557f336adcfdbc1189818de23ad564615e3cd0dffc25d37"
 
+[idConfig]
+snowflakeWorkerID = 0 # 多实例部署时每个实例配置不同值，范围 0-1023
+
 [kafkaConfig]
 messageMode = "channel"
 hostPort = "127.0.0.1:9092"
 loginTopic = "login"
 chatTopic = "chat_message"
+persistTopic = "chat_message_persist"
 logoutTopic = "logout"
+consumerGroup = "chat"
+persistConsumerGroup = "chat_persist"
 messageKey = "chat"
 topicPartitions = 6
 topicReplicationFactor = 1
@@ -57,6 +63,7 @@ consumerCommitIntervalMs = 250
 mysqlPersistBatchSize = 64
 mysqlPersistFlushIntervalMs = 1
 mysqlPersistWorkerCount = 8
+asyncPersistEnabled = false
 
 [staticSrcConfig]
 staticAvatarPath = "./static/avatars"

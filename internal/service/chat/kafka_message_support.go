@@ -13,11 +13,11 @@ import (
 
 	"echo_chat_server/internal/config"
 	"echo_chat_server/internal/dao"
+	"echo_chat_server/internal/dto/request"
 	"echo_chat_server/internal/model"
 	"echo_chat_server/internal/observability"
 	"echo_chat_server/internal/pressure"
 	"echo_chat_server/pkg/enum/message/message_status_enum"
-	"echo_chat_server/pkg/util/random"
 	"echo_chat_server/pkg/zlog"
 
 	"go.uber.org/zap"
@@ -74,7 +74,7 @@ func consumerErrorMeta(err error) (stage string, retryable bool) {
 }
 
 func buildMessageID() string {
-	return fmt.Sprintf("M%s", random.GetNowAndLenRandomString(11))
+	return buildSnowflakeMessageID()
 }
 
 func ensureMessageID(messageID string) string {
@@ -82,6 +82,37 @@ func ensureMessageID(messageID string) string {
 		return messageID
 	}
 	return buildMessageID()
+}
+
+func normalizeClientMsgID(req *request.ChatMessageRequest) {
+	if req == nil {
+		return
+	}
+	if req.ClientMsgID == "" {
+		req.ClientMsgID = req.MessageId
+	}
+}
+
+func assignServerMessageID(req *request.ChatMessageRequest) {
+	if req == nil {
+		return
+	}
+	normalizeClientMsgID(req)
+	req.MessageId = buildMessageID()
+	if req.ClientMsgID == "" {
+		req.ClientMsgID = req.MessageId
+	}
+}
+
+func ensureServerMessageID(req *request.ChatMessageRequest) {
+	if req == nil {
+		return
+	}
+	normalizeClientMsgID(req)
+	req.MessageId = ensureMessageID(req.MessageId)
+	if req.ClientMsgID == "" {
+		req.ClientMsgID = req.MessageId
+	}
 }
 
 func isDuplicateMessageError(err error) bool {

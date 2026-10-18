@@ -78,6 +78,7 @@ func init() {
 			active.POST("/session/getGroupSessionList", v1.GetGroupSessionList)
 			active.POST("/session/deleteSession", v1.DeleteSession)
 			active.POST("/session/checkOpenSessionAllowed", v1.CheckOpenSessionAllowed)
+			active.POST("/session/markRead", v1.MarkConversationRead)
 
 			// 联系人与申请流转相关接口。
 			active.POST("/contact/getUserList", v1.GetUserList)

@@ -3,6 +3,7 @@ package chat
 import (
 	"database/sql"
 	"errors"
+	"fmt"
 	"sync"
 	"time"
 
@@ -153,6 +154,25 @@ func nextMessageSessionSeqDetail(sendID, receiveID string) (int64, string, error
 	conversationSeqInitialized.Store(scope, struct{}{})
 	conversationSequenceTracker.record(scope, value)
 	return value, "cold_start", nil
+}
+
+// WarmConversationSequenceBenchState primes the in-process session_seq state used by the hot path.
+// It is only exposed through benchmark routes, so pressure tests can avoid sending synthetic warmup traffic.
+func WarmConversationSequenceBenchState(conversationKeys []string, floor int64) (int, error) {
+	warmed := 0
+	for _, scope := range conversationKeys {
+		if scope == "" {
+			continue
+		}
+		redisKey := "message_session_seq_" + scope
+		if err := myredis.SetKey(redisKey, fmt.Sprintf("%d", floor)); err != nil {
+			return warmed, err
+		}
+		conversationSeqInitialized.Store(scope, struct{}{})
+		conversationSequenceTracker.record(scope, floor)
+		warmed++
+	}
+	return warmed, nil
 }
 
 // BackfillMessageSessionSeq 为历史消息补齐 session_seq，保证旧数据也能按统一顺序展示。

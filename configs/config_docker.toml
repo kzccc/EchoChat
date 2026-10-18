@@ -1,0 +1,84 @@
+[mainConfig]
+appName = "EchoChat"
+host = "0.0.0.0"
+port = 10000
+
+[mysqlConfig]
+host = "mysql"
+port = 3306
+user = "root"
+password = ""
+databaseName = "echochat"
+maxOpenConns = 200
+maxIdleConns = 50
+connMaxLifetimeMinutes = 30
+connMaxIdleTimeMinutes = 10
+
+[redisConfig]
+host = "redis"
+port = 6379
+password = ""
+db = 0
+
+[authCodeConfig]
+accessKeyID = ""
+accessKeySecret = ""
+signName = "阿里云短信测试"
+templateCode = "SMS_154950909"
+
+[logConfig]
+logPath = "/app/logs/echochat.log"
+level = "info"
+disableStdout = false
+
+[jwtConfig]
+accessExpireMinutes = 60
+refreshExpireHours = 168
+issuer = "EchoChat"
+subject = "user-auth"
+key = "58c89e18c2a896b83557f336adcfdbc1189818de23ad564615e3cd0dffc25d37"
+
+[idConfig]
+snowflakeWorkerID = 0
+
+[kafkaConfig]
+messageMode = "kafka"
+hostPort = "kafka:9092"
+loginTopic = "login"
+chatTopic = "chat_message"
+persistTopic = "chat_message_persist"
+logoutTopic = "logout"
+consumerGroup = "chat"
+persistConsumerGroup = "chat_persist"
+messageKey = "chat"
+topicPartitions = 6
+topicReplicationFactor = 1
+partition = 1
+timeout = 1
+producerRetryMax = 3
+producerRetryBackoffMs = 200
+minInsyncReplicas = 1
+consumerCommitBatchSize = 100
+consumerCommitIntervalMs = 250
+# 可重试失败的治理口径：指数退避 + 次数上限 + 总耗时上限，耗尽后降级为死信并放行位点。
+consumerRetryMaxRetries = 5
+consumerRetryBaseBackoffMs = 200
+consumerRetryMaxBackoffMs = 3200
+consumerRetryMaxTotalDurationMs = 10000
+mysqlPersistBatchSize = 64
+mysqlPersistFlushIntervalMs = 1
+mysqlPersistWorkerCount = 8
+asyncPersistEnabled = false
+
+[staticSrcConfig]
+staticAvatarPath = "/app/static/avatars"
+staticFilePath = "/app/static/files"
+
+[pressureTestConfig]
+enableBenchmarkRoutes = true
+disableBenchmarkRequestLog = true
+disableBenchmarkHotPathLog = true
+
+[observabilityConfig]
+enablePprof = true
+enableMetrics = true

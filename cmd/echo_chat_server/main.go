@@ -4,8 +4,6 @@ package main
 
 import (
 	"context"
-	"errors"
-	"fmt"
 	"echo_chat_server/internal/config"
 	"echo_chat_server/internal/dao"
 	"echo_chat_server/internal/https_server"
@@ -14,6 +12,8 @@ import (
 	"echo_chat_server/internal/service/kafka"
 	myredis "echo_chat_server/internal/service/redis"
 	"echo_chat_server/pkg/zlog"
+	"errors"
+	"fmt"
 	"net/http"
 	"os"
 	"os/signal"
@@ -23,12 +23,18 @@ import (
 
 // main 作为程序启动入口，负责串联配置加载、服务启动和退出清理。
 func main() {
+	defer func() {
+		_ = zlog.Shutdown()
+	}()
+
 	conf := config.GetConfig()
 	host := conf.MainConfig.Host
 	port := conf.MainConfig.Port
 	kafkaConfig := conf.KafkaConfig
-	if err := chat.BackfillMessageSessionSeq(); err != nil {
-		zlog.Fatal(err.Error())
+	if os.Getenv("ECHOCHAT_SKIP_BACKFILL") != "1" {
+		if err := chat.BackfillMessageSessionSeq(); err != nil {
+			zlog.Fatal(err.Error())
+		}
 	}
 	if err := dao.EnsureMessageConversationSeqConstraint(); err != nil {
 		zlog.Fatal(err.Error())

@@ -1,0 +1,79 @@
+# 本机原生部署配置（无 Docker）
+# 后端 8080，前端静态服务 5000，MySQL 3307，Redis 6379。
+# 消息模式用 channel：本机只有 JRE 1.8，Kafka 3.9 需要 Java 11+。
+
+[mainConfig]
+appName = "EchoChat"
+host = "127.0.0.1"
+port = 8080
+
+[mysqlConfig]
+host = "127.0.0.1"
+port = 3307
+user = "root"
+password = ""
+databaseName = "echochat"
+maxOpenConns = 50
+maxIdleConns = 10
+connMaxLifetimeMinutes = 30
+connMaxIdleTimeMinutes = 10
+
+[redisConfig]
+host = "127.0.0.1"
+port = 6379
+password = ""
+db = 0
+
+[authCodeConfig]
+accessKeyID = ""
+accessKeySecret = ""
+signName = "EchoChat"
+templateCode = "SMS_154950909"
+
+[logConfig]
+logPath = "./runtime/logs/echochat-deploy.log"
+level = "info"
+disableStdout = false
+
+[jwtConfig]
+accessExpireMinutes = 120
+refreshExpireHours = 168
+issuer = "EchoChat"
+subject = "user-auth"
+key = "58c89e18c2a896b83557f336adcfdbc1189818de23ad564615e3cd0dffc25d37"
+
+[idConfig]
+snowflakeWorkerID = 1
+
+[kafkaConfig]
+# channel 模式：消息在进程内 channel 流转，不依赖 Kafka。
+messageMode = "channel"
+hostPort = "127.0.0.1:9092"
+loginTopic = "login"
+chatTopic = "chat_message"
+persistTopic = "chat_message_persist"
+logoutTopic = "logout"
+consumerGroup = "chat"
+persistConsumerGroup = "chat_persist"
+messageKey = "chat"
+topicPartitions = 6
+topicReplicationFactor = 1
+partition = 1
+timeout = 2
+consumerCommitBatchSize = 100
+consumerCommitIntervalMs = 250
+consumerRetryMaxRetries = 5
+consumerRetryBaseBackoffMs = 200
+consumerRetryMaxBackoffMs = 3200
+consumerRetryMaxTotalDurationMs = 10000
+
+[staticSrcConfig]
+staticAvatarPath = "./static/avatars"
+staticFilePath = "./static/files"
+
+[pressureTestConfig]
+enableBenchmarkRoutes = false
+
+[observabilityConfig]
+enablePprof = true
+enableMetrics = true
