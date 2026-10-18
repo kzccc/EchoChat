@@ -123,28 +123,70 @@ func (s *sessionService) CheckOpenSessionAllowed(sendId, receiveId string) (stri
 	return "可以发起会话", true, 0
 }
 
+// unreadCountCap 是未读数的封顶值。
+// 产品上未读数只需要精确到 99+，所以最多数这么多条就停，
+// 让统计成本与会话积压深度无关。
+const unreadCountCap = 100
+
+// unreadCount 返回 ownerID 在某个会话下的未读消息数。
+//
+// 统计方式是「数消息行」，而不是「最新序号减已读序号」：
+// session_seq 会因为重试、重放、进死信而出现空洞，用减法会把空洞算成未读，
+// 会话越活跃虚高越明显。数行数则与序号连不连续无关，结果始终准确。
+//
+// 统计口径：会话内、序号大于该用户已读位置、且不是该用户自己发送的消息。
+// 返回值被 unreadCountCap 封顶，达到上限时前端按 99+ 展示。
 func (s *sessionService) unreadCount(ownerID, conversationKey string) int64 {
 	if ownerID == "" || conversationKey == "" {
 		return 0
 	}
-	var latest model.ConversationSequence
-	if err := dao.GormDB.Where("conversation_key = ?", conversationKey).Take(&latest).Error; err != nil {
-		return 0
-	}
+
+	// 查不到已读记录表示该用户从未读过这个会话，按 0 处理（全部未读）。
+	lastReadSeq := int64(0)
 	var readState model.UserReadState
-	if err := dao.GormDB.Where("user_id = ? AND conversation_key = ?", ownerID, conversationKey).Take(&readState).Error; err != nil {
-		return latest.LastSeq
-	}
-	if latest.LastSeq <= readState.LastReadSeq {
+	if err := dao.GormDB.
+		Where("user_id = ? AND conversation_key = ?", ownerID, conversationKey).
+		Take(&readState).Error; err == nil {
+		lastReadSeq = readState.LastReadSeq
+	} else if !errors.Is(err, gorm.ErrRecordNotFound) {
+		// 查询出错时保守返回 0，不要把错误当成"全部未读"抛给前端。
+		zlog.Error(err.Error())
 		return 0
 	}
-	return latest.LastSeq - readState.LastReadSeq
+
+	var count int64
+	// 用子查询 + LIMIT 封顶：外层 COUNT 只数内层最多 cap 行。
+	countErr := dao.GormDB.Raw(
+		"SELECT COUNT(*) FROM ("+
+			"SELECT 1 FROM message "+
+			"WHERE conversation_key = ? AND session_seq > ? AND send_id <> ? "+
+			"LIMIT ?) AS t",
+		conversationKey, lastReadSeq, ownerID, unreadCountCap,
+	).Row().Scan(&count)
+	if countErr != nil {
+		zlog.Error(countErr.Error())
+		return 0
+	}
+	return count
 }
 
 // MarkConversationRead 上报当前用户在某个会话内已经读到的最大 session_seq。
 func (s *sessionService) MarkConversationRead(userID, conversationKey string, lastReadSeq int64) (string, int) {
 	if userID == "" || conversationKey == "" || lastReadSeq <= 0 {
 		return "请求参数错误", -2
+	}
+	// 校验上报的已读位置确实存在：客户端可能上报一个远大于当前最新序号的值，
+	// 不做收敛的话这个会话的未读会被永久清零，而且之后所有新消息都追不上这个位置。
+	var maxSeq int64
+	if err := dao.GormDB.Model(&model.Message{}).
+		Where("conversation_key = ?", conversationKey).
+		Select("COALESCE(MAX(session_seq), 0)").
+		Scan(&maxSeq).Error; err != nil {
+		zlog.Error(err.Error())
+		return constants.SYSTEM_ERROR, -1
+	}
+	if maxSeq > 0 && lastReadSeq > maxSeq {
+		lastReadSeq = maxSeq
 	}
 	now := time.Now()
 	readState := model.UserReadState{
